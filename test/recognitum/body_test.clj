@@ -297,8 +297,8 @@
                       ['(do (set! x 1) true) #"set! of x: a check body cannot assign a field"]
                       ['(do (deftype Other [x]) true) #"deftype field x shadows the field x"]
                       ['(do (def ^{:m x} position-def 1) true) #"x is used where a check body cannot read it"]]]
-    (is (re-find msg (str (refusal (list 'rec/defproven 'Unreadable '[x] 'rec/checks (list 'c [] body))))))
-    (pr-str body)))
+    (is (re-find msg (str (refusal (list 'rec/defproven 'Unreadable '[x] 'rec/checks (list 'c [] body)))))
+        (pr-str body))))
 
 ;;; Every position the compiler evaluates: a field there is read.
 
