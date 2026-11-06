@@ -949,45 +949,45 @@
     ;; reads: a declared key's field, else ext
     (let [mv (method cw pub "valAt" (mdesc clojure.lang.ILookup "valAt" Object))]
       (by-key! mv t ks 1 (fn [i]
-                          (let [absent (Label.)]
-                            (load-field mv t i) (astore! mv 2) (aload! mv 2) (load-absent mv t)
-                            (jump! mv Opcodes/IF_ACMPEQ absent)
-                            (aload! mv 2) (op! mv ret)
-                            (.visitLabel mv absent)
-                            (op! mv Opcodes/ACONST_NULL ret))))
+                           (let [absent (Label.)]
+                             (load-field mv t i) (astore! mv 2) (aload! mv 2) (load-absent mv t)
+                             (jump! mv Opcodes/IF_ACMPEQ absent)
+                             (aload! mv 2) (op! mv ret)
+                             (.visitLabel mv absent)
+                             (op! mv Opcodes/ACONST_NULL ret))))
       (load-ext mv t) (aload! mv 1) (invoke! mv clojure.lang.ILookup "valAt" Object) (op! mv ret)
       (end! mv))
     (let [mv (method cw pub "valAt" (mdesc clojure.lang.ILookup "valAt" Object Object))]
       (by-key! mv t ks 1 (fn [i]
-                          (let [absent (Label.)]
-                            (load-field mv t i) (astore! mv 3) (aload! mv 3) (load-absent mv t)
-                            (jump! mv Opcodes/IF_ACMPEQ absent)
-                            (aload! mv 3) (op! mv ret)
-                            (.visitLabel mv absent)
-                            (aload! mv 2) (op! mv ret))))
+                           (let [absent (Label.)]
+                             (load-field mv t i) (astore! mv 3) (aload! mv 3) (load-absent mv t)
+                             (jump! mv Opcodes/IF_ACMPEQ absent)
+                             (aload! mv 3) (op! mv ret)
+                             (.visitLabel mv absent)
+                             (aload! mv 2) (op! mv ret))))
       (load-ext mv t) (aload! mv 1) (aload! mv 2) (invoke! mv clojure.lang.ILookup "valAt" Object Object) (op! mv ret)
       (end! mv))
     (let [mv (method cw pub "containsKey" (mdesc clojure.lang.Associative "containsKey" Object))]
       (by-key! mv t ks 1 (fn [i]
-                          (let [absent (Label.)]
-                            (load-field mv t i) (load-absent mv t)
-                            (jump! mv Opcodes/IF_ACMPEQ absent)
-                            (op! mv Opcodes/ICONST_1 Opcodes/IRETURN)
-                            (.visitLabel mv absent)
-                            (op! mv Opcodes/ICONST_0 Opcodes/IRETURN))))
+                           (let [absent (Label.)]
+                             (load-field mv t i) (load-absent mv t)
+                             (jump! mv Opcodes/IF_ACMPEQ absent)
+                             (op! mv Opcodes/ICONST_1 Opcodes/IRETURN)
+                             (.visitLabel mv absent)
+                             (op! mv Opcodes/ICONST_0 Opcodes/IRETURN))))
       (load-ext mv t) (aload! mv 1) (invoke! mv clojure.lang.Associative "containsKey" Object) (op! mv Opcodes/IRETURN)
       (end! mv))
     (let [mv (method cw pub "entryAt" (mdesc clojure.lang.Associative "entryAt" Object))]
       (by-key! mv t ks 1 (fn [i]
-                          (let [absent (Label.)]
-                            (load-field mv t i) (load-absent mv t)
-                            (jump! mv Opcodes/IF_ACMPEQ absent)
-                            (aload! mv 1) (load-field mv t i)
-                            (.visitMethodInsn mv Opcodes/INVOKESTATIC "clojure/lang/MapEntry" "create"
-                                              (str "(" OBJ-D OBJ-D ")Lclojure/lang/MapEntry;") false)
-                            (op! mv ret)
-                            (.visitLabel mv absent)
-                            (op! mv Opcodes/ACONST_NULL ret))))
+                           (let [absent (Label.)]
+                             (load-field mv t i) (load-absent mv t)
+                             (jump! mv Opcodes/IF_ACMPEQ absent)
+                             (aload! mv 1) (load-field mv t i)
+                             (.visitMethodInsn mv Opcodes/INVOKESTATIC "clojure/lang/MapEntry" "create"
+                                               (str "(" OBJ-D OBJ-D ")Lclojure/lang/MapEntry;") false)
+                             (op! mv ret)
+                             (.visitLabel mv absent)
+                             (op! mv Opcodes/ACONST_NULL ret))))
       (load-ext mv t) (aload! mv 1) (invoke! mv clojure.lang.Associative "entryAt" Object) (op! mv ret)
       (end! mv))
     (let [mv (method cw pub "count" (mdesc clojure.lang.Counted "count"))]
@@ -1000,10 +1000,10 @@
     (when (pos? n)
       (let [mv (method cw pub "getLookupThunk" (mdesc clojure.lang.IKeywordLookup "getLookupThunk" clojure.lang.Keyword))]
         (by-key! mv t ks 1 (fn [i]
-                            (.visitTypeInsn mv Opcodes/NEW (thunk-name t i))
-                            (op! mv Opcodes/DUP)
-                            (.visitMethodInsn mv Opcodes/INVOKESPECIAL (thunk-name t i) "<init>" "()V" false)
-                            (op! mv ret)))
+                             (.visitTypeInsn mv Opcodes/NEW (thunk-name t i))
+                             (op! mv Opcodes/DUP)
+                             (.visitMethodInsn mv Opcodes/INVOKESPECIAL (thunk-name t i) "<init>" "()V" false)
+                             (op! mv ret)))
         (op! mv Opcodes/ACONST_NULL ret)
         (end! mv)))
     (walk-methods! cw t n)
@@ -1052,9 +1052,9 @@
     (let [mv (method cw pub "assoc" (mdesc clojure.lang.IPersistentMap "assoc" Object Object))
           write (Label.)]
       (by-key! mv t ks 1 (fn [i]
-                          (aload! mv 0) (aload! mv 2)
-                          (.visitMethodInsn mv Opcodes/INVOKESPECIAL t (str "assoc$" i) (str "(" OBJ-D ")" IPM-D) false)
-                          (op! mv ret)))
+                           (aload! mv 0) (aload! mv 2)
+                           (.visitMethodInsn mv Opcodes/INVOKESPECIAL t (str "assoc$" i) (str "(" OBJ-D ")" IPM-D) false)
+                           (op! mv ret)))
       (change! mv t 6 7 #(do (aload! mv 1) (aload! mv 2) 2))
       (load-ext mv t) (aload! mv 1) (aload! mv 2)
       (invoke! mv clojure.lang.IPersistentMap "assoc" Object Object)
@@ -1073,15 +1073,15 @@
           write (Label.)]
       (change! mv t 5 6 #(do (aload! mv 1) (static! mv t "REMOVED" OBJ-D) 2))
       (by-key! mv t ks 1 (fn [i]
-                          (let [present (Label.)]
-                            (load-field mv t i) (load-absent mv t)
-                            (jump! mv Opcodes/IF_ACMPNE present)
-                            (aload! mv 0) (op! mv ret)
-                            (.visitLabel mv present)
-                            (load-entries mv t) (aload! mv 1)
-                            (invoke! mv clojure.lang.IPersistentMap "without" Object)
-                            (astore! mv 2)
-                            (jump! mv Opcodes/GOTO write))))
+                           (let [present (Label.)]
+                             (load-field mv t i) (load-absent mv t)
+                             (jump! mv Opcodes/IF_ACMPNE present)
+                             (aload! mv 0) (op! mv ret)
+                             (.visitLabel mv present)
+                             (load-entries mv t) (aload! mv 1)
+                             (invoke! mv clojure.lang.IPersistentMap "without" Object)
+                             (astore! mv 2)
+                             (jump! mv Opcodes/GOTO write))))
       (load-ext mv t) (aload! mv 1)
       (invoke! mv clojure.lang.IPersistentMap "without" Object)
       (astore! mv 3)
@@ -1616,12 +1616,14 @@
                                   (when-not (.isInstance vc old)
                                     (throw (IllegalArgumentException. "a write starts from a value of its type"))))]
                        (.invoke install nil (object-array [key
-                                                           (fn ([old] (proof/checked-transient old write))
-                                                               ([old entries] (write old entries))
-                                                               ([old entries k v] (write old entries k v)))
-                                                           (fn ([old] (own! old) (proof/checked-transient old write))
-                                                               ([old entries] (own! old) (write old entries))
-                                                               ([a b c] (write a b c)))
+                                                           (fn
+                                                             ([old] (proof/checked-transient old write))
+                                                             ([old entries] (write old entries))
+                                                             ([old entries k v] (write old entries k v)))
+                                                           (fn
+                                                             ([old] (own! old) (proof/checked-transient old write))
+                                                             ([old entries] (own! old) (write old entries))
+                                                             ([a b c] (write a b c)))
                                                            guards
                                                            changes])))
                      nil)

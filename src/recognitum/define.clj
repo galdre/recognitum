@@ -46,13 +46,13 @@
     (let [[nm waits & more] clause
           [doc body] (if (and (string? (first more)) (next more)) [(first more) (rest more)] [nil more])
           concerns (reduce-kv (fn [acc k _]
-                            (cond (plain-meta k) acc
-                                  (qualified-keyword? k)
-                                  (if (concern-var k)
-                                    (conj acc k)
-                                    (fail! ctx (str "^" k " on " nm " names no concern that rec/defconcern defines")))
-                                  :else (fail! ctx (str "unknown flag ^" k " on " nm))))
-                          #{} (or (meta clause) {}))]
+                                (cond (plain-meta k) acc
+                                      (qualified-keyword? k)
+                                      (if (concern-var k)
+                                        (conj acc k)
+                                        (fail! ctx (str "^" k " on " nm " names no concern that rec/defconcern defines")))
+                                      :else (fail! ctx (str "unknown flag ^" k " on " nm))))
+                              #{} (or (meta clause) {}))]
       (when (empty? body) (fail! ctx (str nm " has no body")))
       {:name nm :waits waits :doc doc :concerns concerns :line (:line (meta clause))
        :override? (boolean (:override (meta clause)))
@@ -283,8 +283,9 @@
           (when-not (arities (count params))
             (fail! ctx (str "method " name " of " marker " takes " (str/join " or " (sort arities))
                             (parameters (apply max arities)) ", the value first, not " (count params))))
-          (assoc impl :protocol? true
-                      :sig [(munge (clojure.core/name name)) (vec (repeat (dec (count params)) Object))])))))
+          (assoc impl
+                 :protocol? true
+                 :sig [(munge (clojure.core/name name)) (vec (repeat (dec (count params)) Object))])))))
 
 (def ^:private primitives
   {'long Long/TYPE 'int Integer/TYPE 'double Double/TYPE 'float Float/TYPE 'boolean Boolean/TYPE
@@ -528,7 +529,6 @@
                   (recognitum.record/make ~t ~build)))
               `([~@(map #(with-meta % nil) fields)] (recognitum.record/make ~t ~build)))))]))
 
-
 (defn defproven
   "The expansion of `(rec/defproven T [fields] sections... method-sections...)`. `opts` holds
   what [[defchecks]] takes; `:wiring`, the form of the map `recognitum.record/define-type`
@@ -604,7 +604,7 @@
                 :sources `(get-in @(var ~sym) [:checks '~n :sources])
                 :fetches? (:fetches? c)
                 :run `(recognitum.record/bound-check (get-in @(var ~sym) [:checks '~n :run])
-                                                   (select-keys ~(input-sym sym) ~(mapv input-key (sort (:input-reads c)))))}))
+                                                     (select-keys ~(input-sym sym) ~(mapv input-key (sort (:input-reads c)))))}))
         all (into own-checks bundle-checks)
         _ (refuse-duplicates! ctx "checks" (map :id all))
         known (set (map :id all))
@@ -617,14 +617,14 @@
         t (gensym "type")
         define-it
         `(recognitum.record/define-type
-          {:name '~tag-sym
-           :fields ~(mapv (fn [f] {:key (key-of f) :sym (list 'quote f) :optional? (contains? optional f)}) fields)
-           :checks ~(mapv #(select-keys % [:id :doc :concerns :waits :gate :reads :sources :fetches? :shape-of :run]) all)
-           :interfaces ~interfaces
-           :methods ~(into {} (for [m methods] [(:sig m) (method-fn tname fields key-of m)]))
-           :guard (recognitum.record/guard-maker)
-           :change (recognitum.record/change-guard-maker)}
-          ~wiring)
+           {:name '~tag-sym
+            :fields ~(mapv (fn [f] {:key (key-of f) :sym (list 'quote f) :optional? (contains? optional f)}) fields)
+            :checks ~(mapv #(select-keys % [:id :doc :concerns :waits :gate :reads :sources :fetches? :shape-of :run]) all)
+            :interfaces ~interfaces
+            :methods ~(into {} (for [m methods] [(:sig m) (method-fn tname fields key-of m)]))
+            :guard (recognitum.record/guard-maker)
+            :change (recognitum.record/change-guard-maker)}
+           ~wiring)
         inputs (mapcat (fn [{:keys [sym inputs]}]
                          [(input-sym sym)
                           (into {} (for [[in {:keys [form]}] inputs]
@@ -634,7 +634,7 @@
         new-vars (set (remove #(.getMapping *ns* %) (map second factories)))]
     `(let [~@inputs
            ~t (recognitum.define/defined ~(:where ctx) '~(ns-name *ns*) '~tname ~classname '~new-vars
-                                         (fn [] ~define-it))]
+                (fn [] ~define-it))]
        ~@factories
        (recognitum.record/value-class ~t))))
 

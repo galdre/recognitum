@@ -207,7 +207,8 @@
 (deftest naming-a-shape-check-in-a-wait-changes-nothing
   (let [ns' (create-ns 'recognitum.record-test.waits)
         define (fn [waits]
-                 (binding [*ns* ns'] (refer-clojure)
+                 (binding [*ns* ns']
+                   (refer-clojure)
                    (eval `(recognitum.core/defproven ~'W [~'a]
                             recognitum.core/checks
                             (~'a [] (~'int? ~'a))

@@ -23,13 +23,13 @@
 
   ^::access
   (may-refund []
-    "the actor holds the refund grant for the order"
-    (true? (rec/fetch perms/allowed [actor :refund order-id])))
+              "the actor holds the refund grant for the order"
+              (true? (rec/fetch perms/allowed [actor :refund order-id])))
 
   ^::access
   (within-limit [may-refund]
-    "the amount is within the actor's refund limit"
-    (<= amount (or (rec/fetch perms/refund-limit actor) 0))))
+                "the amount is within the actor's refund limit"
+                (<= amount (or (rec/fetch perms/refund-limit actor) 0))))
 
 (defn request->draft
   "A draft of a Refund from a request: the actor from the session, the rest from the form's

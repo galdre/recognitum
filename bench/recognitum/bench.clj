@@ -105,15 +105,17 @@
 
 (defn- m-add [r i]
   (let [who (keyword (str "m" i))]
-    (-> r (assoc :crew (conj (:crew r) who))
-          (assoc :cuts (assoc (:cuts r) who 10))
-          (assoc :take (+ (:take r) 10)))))
+    (-> r
+        (assoc :crew (conj (:crew r) who))
+        (assoc :cuts (assoc (:cuts r) who 10))
+        (assoc :take (+ (:take r) 10)))))
 
 (defn- q-add [x i]
   (let [who (keyword (str "m" i))]
-    (-> x (assoc ::crew (conj (::crew x) who))
-          (assoc ::cuts (assoc (::cuts x) who 10))
-          (assoc ::take (+ (::take x) 10)))))
+    (-> x
+        (assoc ::crew (conj (::crew x) who))
+        (assoc ::cuts (assoc (::cuts x) who 10))
+        (assoc ::take (+ (::take x) 10)))))
 
 (defn- reads [f] (loop [i 0 acc 0] (if (< i 100) (recur (inc i) (+ acc (long (f)))) acc)))
 

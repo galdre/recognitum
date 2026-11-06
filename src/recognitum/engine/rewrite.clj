@@ -162,8 +162,8 @@
             syms (take-nth 2 bs)
             params (mapv (fn [_] (gensym "p")) syms)]
         `(let* [~lp (fn* ~lp ~params
-                         (let* [~@(interleave syms params)]
-                           ~(binding [*loop* lp] (cps-do body k'))))]
+                      (let* [~@(interleave syms params)]
+                        ~(binding [*loop* lp] (cps-do body k'))))]
            ~(cps-bind bs (fn [] `(~lp ~@syms))))))))
 
 (defn- cps-read [kind [s x] k]

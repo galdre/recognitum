@@ -1,0 +1,7 @@
+{:paths ["src" "test" "dev" "bench" "resources" "design"]
+ :extra-indents {recognitum.core/defproven   [[:block 2] [:inner 1]]
+                 recognitum.core/defchecks   [[:block 2] [:inner 1]]
+                 recognitum.core/defcopy     [[:block 2]]
+                 recognitum.core/defconcern  [[:block 1]]
+                 recognitum.core/when-extant [[:block 1]]
+                 fn*                         [[:inner 0]]}}

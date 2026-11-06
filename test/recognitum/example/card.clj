@@ -34,8 +34,8 @@
 
   ^::perms/permission
   (moves-only-where-allowed [perms/may-write perms/current-may-write]
-    "a move needs write access to both collections"
-    true)
+                            "a move needs write access to both collections"
+                            true)
 
   (owner-active [perms/collection-exists]
     "the collection's owner is active"
@@ -50,6 +50,6 @@
   (title [] (non-blank? title))
   ^:override
   (perms/may-write [perms/collection-exists]
-    "dashboards also allow the collection's curators"
-    (let [coll (rec/fetch db/collections collection-id)]
-      (or (db/can-write? acting-user coll) (db/can-curate? acting-user coll)))))
+                   "dashboards also allow the collection's curators"
+                   (let [coll (rec/fetch db/collections collection-id)]
+                     (or (db/can-write? acting-user coll) (db/can-curate? acting-user coll)))))

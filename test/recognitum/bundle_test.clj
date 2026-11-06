@@ -130,14 +130,17 @@
 (deftest a-bare-wait-on-a-bundle-of-this-namespace-says-to-qualify-it
   (is (= (str "wait positives of c is not a check of Bare. Its own checks: c."
               " A wait on a bundle is qualified: recognitum.bundle-test/positives")
-         (refusal '(rec/defproven Bare [a b] positives (x [] a) (y [] b)
+         (refusal '(rec/defproven Bare [a b]
+                     positives (x [] a) (y [] b)
                      rec/checks (c [positives] true)))))
   (is (= (str "wait x-positive of c is not a check of Bare. Its own checks: c."
               " A wait on a bundle's check is qualified: recognitum.bundle-test/x-positive")
-         (refusal '(rec/defproven Bare [a b] positives (x [] a) (y [] b)
+         (refusal '(rec/defproven Bare [a b]
+                     positives (x [] a) (y [] b)
                      rec/checks (c [x-positive] true)))))
-  (is (nil? (refusal '(rec/defproven Qualified [a b] positives (x [] a) (y [] b)
-                       rec/checks (c [recognitum.bundle-test/positives] true))))
+  (is (nil? (refusal '(rec/defproven Qualified [a b]
+                        positives (x [] a) (y [] b)
+                        rec/checks (c [recognitum.bundle-test/positives] true))))
       "qualified, the wait is accepted"))
 
 (rec/defcopy other-collection-write perms/collection-write
@@ -153,16 +156,20 @@
 (deftest a-qualified-clause-replaces-a-bundle-check-only-when-marked
   (is (= (str "recognitum.bundle-test/x-positive is qualified:"
               " mark it ^:override to replace that bundle check")
-         (refusal '(rec/defproven Unmarked [a b] positives (x [] a) (y [] b)
+         (refusal '(rec/defproven Unmarked [a b]
+                     positives (x [] a) (y [] b)
                      rec/checks (recognitum.bundle-test/x-positive [] true)))))
   (is (= "^:override needs a qualified bundle check, got x-positive"
-         (refusal '(rec/defproven Plain [a b] positives (x [] a) (y [] b)
+         (refusal '(rec/defproven Plain [a b]
+                     positives (x [] a) (y [] b)
                      rec/checks ^:override (x-positive [] true)))))
-  (is (nil? (refusal '(rec/defproven Marked [a b] positives (x [] a) (y [] b)
-                       rec/checks ^:override (recognitum.bundle-test/x-positive [] true))))
+  (is (nil? (refusal '(rec/defproven Marked [a b]
+                        positives (x [] a) (y [] b)
+                        rec/checks ^:override (recognitum.bundle-test/x-positive [] true))))
       "marked, the override is accepted"))
 
 (deftest two-input-clauses-of-one-name-are-refused
   (is (= "two input clauses of positives are named x"
-         (refusal '(rec/defproven Twice [a b] positives (x [] a) (x [] 1) (y [] b)
+         (refusal '(rec/defproven Twice [a b]
+                     positives (x [] a) (x [] 1) (y [] b)
                      rec/checks (a [] true))))))

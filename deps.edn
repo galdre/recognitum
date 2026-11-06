@@ -19,4 +19,11 @@
          :extra-deps {io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                       org.clojure/test.check {:mvn/version "1.1.1"}}
-         :exec-fn cognitect.test-runner.api/test}}}
+         :exec-fn cognitect.test-runner.api/test}
+
+  ;; Checks the formatting of the paths .cljfmt.edn names; fix rewrites what check reports.
+  ;;   clojure -M:fmt check
+  ;;   clojure -M:fmt fix
+  :fmt {:extra-deps {dev.weavejester/cljfmt {:mvn/version "0.16.4"}}
+        :main-opts ["-m" "cljfmt.main" "--file-pattern" "\\.(?:clj[csx]?|bb|edn)$"]}}}
+

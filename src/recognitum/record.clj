@@ -32,21 +32,19 @@
                      (= mask (.-mask ^PassKey o))))
   (hashCode [_] (unchecked-add-int (System/identityHashCode data) (hash passes))))
 
-(deftype Memo
-  ;; What a draft remembers: the checks `passes` that pass on the entries of `base`, as `proof`
-  ;; shows, and the keys `written` since. `proof` is a sealed value of `type` that is `base`
-  ;; itself, so every check passes, or a draft of the type's proof strategy marked with
-  ;; `(PassKey base passes mask)`; nil where nothing passes. `mask` is `passes` as a mask (see
-  ;; [[Hot]]), or nil for a type of more than 64 checks.
-  [type base passes written proof mask])
+;; What a draft remembers: the checks `passes` that pass on the entries of `base`, as `proof`
+;; shows, and the keys `written` since. `proof` is a sealed value of `type` that is `base`
+;; itself, so every check passes, or a draft of the type's proof strategy marked with
+;; `(PassKey base passes mask)`; nil where nothing passes. `mask` is `passes` as a mask (see
+;; [[Hot]]), or nil for a type of more than 64 checks.
+(deftype Memo [type base passes written proof mask])
 
-(deftype ^:private Hot
-  ;; What `passes` reads of a type, in fields: its value class, its draft class, its proof
-  ;; strategy, its check ids and each key's readers as a vector. A type of at most 64 checks
-  ;; also gives each check a bit of a long: `bits` maps each id to its bit, `all` has every
-  ;; bit, `readers-m` maps each key to the bits of its readers, `ids-v` holds the ids by bit,
-  ;; and `sets` keeps the set of each mask asked for. Of a larger type these are nil.
-  [vc dc strategy ids readers-v bits all readers-m ids-v ^java.util.concurrent.ConcurrentHashMap sets])
+;; What `passes` reads of a type, in fields: its value class, its draft class, its proof
+;; strategy, its check ids and each key's readers as a vector. A type of at most 64 checks
+;; also gives each check a bit of a long: `bits` maps each id to its bit, `all` has every
+;; bit, `readers-m` maps each key to the bits of its readers, `ids-v` holds the ids by bit,
+;; and `sets` keeps the set of each mask asked for. Of a larger type these are nil.
+(deftype ^:private Hot [vc dc strategy ids readers-v bits all readers-m ids-v ^java.util.concurrent.ConcurrentHashMap sets])
 
 (defn- hot-of
   "The `Hot` of a type with check ids `ids` and readers `readers` (key to set of ids)."
@@ -406,8 +404,8 @@
      (when (reduce (fn [_ k] (if (bad? k) (reduced true) false)) false ks)
        (let [bad (filter bad? ks)]
          (throw (ex-info (str (:name type) " has no field " (str/join ", " (map pr-str (sort-by str bad)))
-                         ". Its fields: " (str/join " " (map :key (:fields type))))
-                    {:error :recognitum/undeclared-keys :type (:name type) :keys (set bad)})))))))
+                              ". Its fields: " (str/join " " (map :key (:fields type))))
+                         {:error :recognitum/undeclared-keys :type (:name type) :keys (set bad)})))))))
 
 (defn- all-declared?
   "Whether `declared?` holds of every key of map `m`."
@@ -449,11 +447,11 @@
   (if (identical? s known)
     #{}
     (let [it (.iterator ^Iterable s)]
-    (loop [acc #{}]
-      (if (.hasNext it)
-        (let [x (.next it)]
-          (recur (if (contains? known x) acc (conj acc x))))
-        acc)))))
+      (loop [acc #{}]
+        (if (.hasNext it)
+          (let [x (.next it)]
+            (recur (if (contains? known x) acc (conj acc x))))
+          acc)))))
 
 (defn- passed-in
   "The checks of `to-run` that passed in `result`."
@@ -795,13 +793,13 @@
   (let [displaced (named-now (:name spec))
         current (volatile! true)
         h (proof/define-type strategy (:name spec)
-                             {:keys (mapv :key (:fields spec))
-                              :interfaces (vec (:interfaces spec))
-                              :methods (let [refuse (fn [v] (throw (displaced-refusal (:name spec) v)))]
-                                         (into {} (for [[[n ps :as sig] make] (:methods spec)]
-                                                    [sig (if (and (= "toString" n) (empty? ps))
-                                                           (make (volatile! true) refuse)
-                                                           (make current refuse))])))})
+            {:keys (mapv :key (:fields spec))
+             :interfaces (vec (:interfaces spec))
+             :methods (let [refuse (fn [v] (throw (displaced-refusal (:name spec) v)))]
+                        (into {} (for [[[n ps :as sig] make] (:methods spec)]
+                                   [sig (if (and (= "toString" n) (empty? ps))
+                                          (make (volatile! true) refuse)
+                                          (make current refuse))])))})
         [vc dc] (proof/classes h)
         type (let [t (compile-type spec strategy define run-all runner)]
                (assoc t ::class vc ::draft-class dc ::gate (volatile! nil)
@@ -913,10 +911,10 @@
                            failed (keys (:failed result))]
                        (when-not (or (and (empty? to-run) (empty? forget))
                                      (compare-and-set! (.-cell d) m0
-                                                   (memo data (reduce disj
-                                                                       (into (reduce disj known forget)
-                                                                             (passed-in to-run result))
-                                                                       failed))))
+                                                       (memo data (reduce disj
+                                                                          (into (reduce disj known forget)
+                                                                                (passed-in to-run result))
+                                                                          failed))))
                          (swap! (.-cell d) #(memo data (reduce disj (passes type data %) (concat failed forget))))))))
         ;; [[remember!]] for a type with masks, with nothing more to forget: `km` the mask of
         ;; the checks known to pass, `tm` of those run
@@ -1255,13 +1253,13 @@
                        (if (let [m ((.get per-type type) 2)]
                              (and m (zero? (bit-and-not (long m) (passes-mask type (.-data ^Draft x) (marks-of x))))))
                          (recur (inc i) others)
-                       (let [^java.util.ArrayList is (or (.get drafts type)
-                                                          (let [is (java.util.ArrayList.)]
-                                                            (.put drafts type is)
-                                                            (.add order type)
-                                                            is))]
-                         (.add is i)
-                         (recur (inc i) others)))
+                         (let [^java.util.ArrayList is (or (.get drafts type)
+                                                           (let [is (java.util.ArrayList.)]
+                                                             (.put drafts type is)
+                                                             (.add order type)
+                                                             is))]
+                           (.add is i)
+                           (recur (inc i) others)))
                        (let [to-run (minus ((.get per-type type) 1) (passes-of type x))]
                          (recur (inc i)
                                 (if (seq to-run)

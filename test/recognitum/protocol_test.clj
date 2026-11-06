@@ -132,7 +132,8 @@
   (let [ns' (create-ns (gensym "recognitum.protocol-test.redefined"))
         define #(binding [*ns* ns']
                   (refer-clojure)
-                  (eval `(rec/defproven ~'R [~'a] rec/checks (~'a [] (int? ~'a))
+                  (eval `(rec/defproven ~'R [~'a]
+                           rec/checks (~'a [] (int? ~'a))
                            Describe (~'describe [~'_] (str "R" ~'a)) (~'describe-with [~'_ ~'p] ~'p))))
         k (keyword (str ns') "a")
         make #((ns-resolve ns' 'map->R) {k %})
@@ -188,35 +189,35 @@
                      rec/checks (title [] (string? title)))))))
 
 (deftest interface-methods-are-refused-where-the-value-is-a-map
-  (doseq [[msg form] (partition 2 [
-   "method equals of Object: a value's equality and hash are its map's, so a type gives neither equals nor hashCode"
-   '(recognitum.core/defproven I1 [title] rec/checks (title [] (string? title)) Object (equals [_ o] true))
-   "method hashCode of Object: a value's equality and hash are its map's, so a type gives neither equals nor hashCode"
-   '(recognitum.core/defproven I2 [title] rec/checks (title [] (string? title)) Object (hashCode [_] 0))
-   "method notify of Object: of Object's methods, a type gives only toString"
-   '(recognitum.core/defproven I3 [title] rec/checks (title [] (string? title)) Object (notify [_]))
-   "Labelled declares no method shout. Its methods: label"
-   '(recognitum.core/defproven I4 [title] rec/checks (title [] (string? title)) Labelled (shout [_]))
-   "method label of Labelled: 2 methods take 1 parameter after the value; hint the parameters' types to choose one: label(java.lang.String) label(java.lang.Long)"
-   '(recognitum.core/defproven I5 [title] rec/checks (title [] (string? title)) Labelled (label [_ x] x))
-   "method label of Labelled takes 1 or 2 parameters, the value first, not 3"
-   '(recognitum.core/defproven I6 [title] rec/checks (title [] (string? title)) Labelled (label [_ x y] x))
-   "no method label of Labelled takes the hinted types: label(java.lang.String) label(java.lang.Long)"
-   '(recognitum.core/defproven I7 [title] rec/checks (title [] (string? title)) Labelled (label [_ ^Integer x] x))
-   "String is a class, not a protocol or an interface: of the classes, a defproven type implements interfaces and Object's toString"
-   '(recognitum.core/defproven I8 [title] rec/checks (title [] (string? title)) String (length [_] 0))
-   "interface Labelled is listed twice"
-   '(recognitum.core/defproven I9 [title] rec/checks (title [] (string? title)) Labelled (label [_] title) Labelled)
-   "method label of Labelled is written twice with 1 parameter"
-   '(recognitum.core/defproven I10 [title] rec/checks (title [] (string? title)) Labelled (label [_] title) (label [this] 1))
-   "method describe of Describe hints B3 on this: B3 has no class while the methods compile. In a method body B3 is the value's class, (class this), and takes no hint"
-   '(recognitum.core/defproven B3 [title] rec/checks (title [] (string? title)) Describe (describe [^B3 this] title))
-   "method describe of Describe hints B4 on this: B4 has no class while the methods compile. In a method body B4 is the value's class, (class this), and takes no hint"
-   '(recognitum.core/defproven B4 [title] rec/checks (title [] (string? title)) Describe (describe [^"B4" this] title))
-   "a method of Describe is (name [this params...] body...): (describe this)"
-   '(recognitum.core/defproven B5 [title] rec/checks (title [] (string? title)) Describe (describe this))
-   "the hint ^Nope on parameter x of method label names no class"
-   '(recognitum.core/defproven B6 [title] rec/checks (title [] (string? title)) Labelled (label [_ ^Nope x] x))])]
+  (doseq [[msg form]
+          (partition 2 ["method equals of Object: a value's equality and hash are its map's, so a type gives neither equals nor hashCode"
+                        '(recognitum.core/defproven I1 [title] rec/checks (title [] (string? title)) Object (equals [_ o] true))
+                        "method hashCode of Object: a value's equality and hash are its map's, so a type gives neither equals nor hashCode"
+                        '(recognitum.core/defproven I2 [title] rec/checks (title [] (string? title)) Object (hashCode [_] 0))
+                        "method notify of Object: of Object's methods, a type gives only toString"
+                        '(recognitum.core/defproven I3 [title] rec/checks (title [] (string? title)) Object (notify [_]))
+                        "Labelled declares no method shout. Its methods: label"
+                        '(recognitum.core/defproven I4 [title] rec/checks (title [] (string? title)) Labelled (shout [_]))
+                        "method label of Labelled: 2 methods take 1 parameter after the value; hint the parameters' types to choose one: label(java.lang.String) label(java.lang.Long)"
+                        '(recognitum.core/defproven I5 [title] rec/checks (title [] (string? title)) Labelled (label [_ x] x))
+                        "method label of Labelled takes 1 or 2 parameters, the value first, not 3"
+                        '(recognitum.core/defproven I6 [title] rec/checks (title [] (string? title)) Labelled (label [_ x y] x))
+                        "no method label of Labelled takes the hinted types: label(java.lang.String) label(java.lang.Long)"
+                        '(recognitum.core/defproven I7 [title] rec/checks (title [] (string? title)) Labelled (label [_ ^Integer x] x))
+                        "String is a class, not a protocol or an interface: of the classes, a defproven type implements interfaces and Object's toString"
+                        '(recognitum.core/defproven I8 [title] rec/checks (title [] (string? title)) String (length [_] 0))
+                        "interface Labelled is listed twice"
+                        '(recognitum.core/defproven I9 [title] rec/checks (title [] (string? title)) Labelled (label [_] title) Labelled)
+                        "method label of Labelled is written twice with 1 parameter"
+                        '(recognitum.core/defproven I10 [title] rec/checks (title [] (string? title)) Labelled (label [_] title) (label [this] 1))
+                        "method describe of Describe hints B3 on this: B3 has no class while the methods compile. In a method body B3 is the value's class, (class this), and takes no hint"
+                        '(recognitum.core/defproven B3 [title] rec/checks (title [] (string? title)) Describe (describe [^B3 this] title))
+                        "method describe of Describe hints B4 on this: B4 has no class while the methods compile. In a method body B4 is the value's class, (class this), and takes no hint"
+                        '(recognitum.core/defproven B4 [title] rec/checks (title [] (string? title)) Describe (describe [^"B4" this] title))
+                        "a method of Describe is (name [this params...] body...): (describe this)"
+                        '(recognitum.core/defproven B5 [title] rec/checks (title [] (string? title)) Describe (describe this))
+                        "the hint ^Nope on parameter x of method label names no class"
+                        '(recognitum.core/defproven B6 [title] rec/checks (title [] (string? title)) Labelled (label [_ ^Nope x] x))])]
     (is (= msg (refusal form)))))
 
 (deftest a-refusal-of-the-proof-is-made-at-expansion
@@ -348,8 +349,8 @@
 
 (deftest a-name-that-cannot-take-the-class-leaves-nothing
   (let [[n [_ refused]] (in-fresh-ns '(def W 1)
-                                      '(recognitum.core/defproven W [a]
-                                         recognitum.core/checks (a [] (int? a))))]
+                                     '(recognitum.core/defproven W [a]
+                                        recognitum.core/checks (a [] (int? a))))]
     (is (some-message refused (str "W already names #'" n "/W in " n ", so the type's class cannot take the name")))
     (is (some-message refused "Nothing is defined under W"))
     (is (= 1 @(ns-resolve n 'W)))
@@ -415,25 +416,25 @@
       (is (rec/sealed? ((ns-resolve n '->T) 1 nil))))))
 
 (deftest methods-are-refused-where-defrecord-refuses-them
-  (doseq [[msg form] (partition 2 [
-   "Describe has no method summary. Its methods: describe describe-with"
-   '(recognitum.core/defproven M1 [a] rec/checks (a [] true) Describe (summary [_] a))
-   "method describe of Describe takes 1 parameter, the value first, not 2"
-   '(recognitum.core/defproven M2 [a] rec/checks (a [] true) Describe (describe [_ x] a))
-   "method weigh of Measure takes 1 or 2 parameters, the value first, not 3"
-   '(recognitum.core/defproven M3 [a] rec/checks (a [] true) Measure (weigh [_ x y] a))
-   "method describe of Describe is written twice with 1 parameter"
-   '(recognitum.core/defproven M4 [a] rec/checks (a [] true) Describe (describe [_] a) (describe [this] a))
-   "method describe of Describe needs a first parameter, for the value"
-   '(recognitum.core/defproven M5 [a] rec/checks (a [] true) Describe (describe [] a))
-   "the parameters of method describe-with of Describe are plain symbols: [_ {:keys [p]}]"
-   '(recognitum.core/defproven M6 [a] rec/checks (a [] true) Describe (describe-with [_ {:keys [p]}] p))
-   "protocol Describe is implemented twice"
-   '(recognitum.core/defproven M7 [a] rec/checks (a [] true) Describe (describe [_] a) Describe)
-   "Nope names no bundle var, no protocol and no interface"
-   '(recognitum.core/defproven M8 [a] rec/checks (a [] true) Describe (describe [_] a) Nope)
-   "str is not a bundle, a protocol or an interface"
-   '(recognitum.core/defproven M9 [a] rec/checks (a [] true) str (describe [_] a))])]
+  (doseq [[msg form]
+          (partition 2 ["Describe has no method summary. Its methods: describe describe-with"
+                        '(recognitum.core/defproven M1 [a] rec/checks (a [] true) Describe (summary [_] a))
+                        "method describe of Describe takes 1 parameter, the value first, not 2"
+                        '(recognitum.core/defproven M2 [a] rec/checks (a [] true) Describe (describe [_ x] a))
+                        "method weigh of Measure takes 1 or 2 parameters, the value first, not 3"
+                        '(recognitum.core/defproven M3 [a] rec/checks (a [] true) Measure (weigh [_ x y] a))
+                        "method describe of Describe is written twice with 1 parameter"
+                        '(recognitum.core/defproven M4 [a] rec/checks (a [] true) Describe (describe [_] a) (describe [this] a))
+                        "method describe of Describe needs a first parameter, for the value"
+                        '(recognitum.core/defproven M5 [a] rec/checks (a [] true) Describe (describe [] a))
+                        "the parameters of method describe-with of Describe are plain symbols: [_ {:keys [p]}]"
+                        '(recognitum.core/defproven M6 [a] rec/checks (a [] true) Describe (describe-with [_ {:keys [p]}] p))
+                        "protocol Describe is implemented twice"
+                        '(recognitum.core/defproven M7 [a] rec/checks (a [] true) Describe (describe [_] a) Describe)
+                        "Nope names no bundle var, no protocol and no interface"
+                        '(recognitum.core/defproven M8 [a] rec/checks (a [] true) Describe (describe [_] a) Nope)
+                        "str is not a bundle, a protocol or an interface"
+                        '(recognitum.core/defproven M9 [a] rec/checks (a [] true) str (describe [_] a))])]
     (is (= msg (refusal form)))))
 
 (defn- in-fresh-ns

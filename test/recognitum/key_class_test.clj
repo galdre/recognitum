@@ -279,7 +279,6 @@
    {:interfaces [Plain] :methods {'[show :x] identity}}             "a signature is"
    {:interfaces [Plain] :methods {['show [:x]] identity}}           "a signature is"))
 
-
 (deftest refused-return-type-conflicts
   (are-refused
    {:interfaces [ReturnsString ReturnsLong]}                        "differ only in return type"))

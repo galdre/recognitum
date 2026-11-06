@@ -15,18 +15,15 @@
 ;; One field past the limit, with no checks: every difference from the twin is one of width.
 (rec/defproven Wide21 [f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18 f19 f20])
 
-(clojure.core/defrecord PlainWide21
-  [f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18 f19 f20])
+(clojure.core/defrecord PlainWide21 [f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18 f19 f20])
 
 ;; Five fields past the limit, with a shape check on the last: the check reads the field as a
 ;; local, so it pins that the arguments past the twentieth reach the fields they name.
-(rec/defproven Wide25
-  [f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18 f19 f20 f21 f22 f23 f24]
+(rec/defproven Wide25 [f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18 f19 f20 f21 f22 f23 f24]
   rec/checks
   (f24 [] (int? f24)))
 
-(clojure.core/defrecord PlainWide25
-  [f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18 f19 f20 f21 f22 f23 f24])
+(clojure.core/defrecord PlainWide25 [f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18 f19 f20 f21 f22 f23 f24])
 
 ;; Exactly the limit: every field is a parameter.
 (rec/defproven Narrow20 [f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18 f19])

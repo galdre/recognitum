@@ -295,15 +295,15 @@
   note, given the cycle's nodes, what to add to the message."
   ([clauses edges label] (cycles! clauses edges label (constantly nil)))
   ([clauses edges label note]
-  (reduce (fn [done [n at]]
-            (let [r (reach edges n)]
-              (if (or (done n) (not (contains? r n)))
-                done
-                (do (finding! at :recognitum/wait-cycle
-                              (let [path (ring edges n)]
-                                (str "the waits form a cycle: " (str/join " -> " (map label path)) (note path))))
-                    (into done (filter #(contains? (reach edges %) n) r))))))
-          #{} clauses)))
+   (reduce (fn [done [n at]]
+             (let [r (reach edges n)]
+               (if (or (done n) (not (contains? r n)))
+                 done
+                 (do (finding! at :recognitum/wait-cycle
+                               (let [path (ring edges n)]
+                                 (str "the waits form a cycle: " (str/join " -> " (map label path)) (note path))))
+                     (into done (filter #(contains? (reach edges %) n) r))))))
+           #{} clauses)))
 
 ;; ------------------------------------------------------------------ hooks
 
@@ -367,7 +367,7 @@
     (if (or extra (not (api/map-node? names)))
       (do (when-not (or extra (api/map-node? names))
             (finding! (or names node) :recognitum/copy-form
-                    "rec/defcopy takes a map {check new-check ...} after the bundle"))
+                      "rec/defcopy takes a map {check new-check ...} after the bundle"))
           {:node (lst (tok 'do) (lst (tok 'def) nm (tok nil)) bundle)})
       (let [shape (bundle-shape bundle)
             pairs (partition 2 (:children names))

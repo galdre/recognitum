@@ -298,7 +298,7 @@
                       ['(do (deftype Other [x]) true) #"deftype field x shadows the field x"]
                       ['(do (def ^{:m x} position-def 1) true) #"x is used where a check body cannot read it"]]]
     (is (re-find msg (str (refusal (list 'rec/defproven 'Unreadable '[x] 'rec/checks (list 'c [] body))))))
-        (pr-str body)))
+    (pr-str body)))
 
 ;;; Every position the compiler evaluates: a field there is read.
 
@@ -413,7 +413,8 @@
             #"Unable to resolve symbol: b in this context"]]]
     (is (re-find msg (str (refusal (list 'rec/defproven 'InDeftype '[x] 'rec/checks (list 'c [] body)))))
         (pr-str body)))
-  (is (nil? (refusal '(rec/defproven InDeftype [x] rec/checks
+  (is (nil? (refusal '(rec/defproven InDeftype [x]
+                        rec/checks
                         (c [] (let [t (do (deftype Passed [q] Pair (pair [_ a] [a q])) (recognitum.body_test.Passed. x))]
                                 (= [0 x] (.pair ^Pair t 0)))))))
       "a field passed in is the deftype's own"))

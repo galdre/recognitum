@@ -13,8 +13,8 @@
 
   ^::permission
   (may-write [collection-exists]
-    "the acting user may write to the collection"
-    (db/can-write? user (rec/fetch db/collections collection-id))))   ; user absent: throws, so fails
+             "the acting user may write to the collection"
+             (db/can-write? user (rec/fetch db/collections collection-id))))   ; user absent: throws, so fails
 
 (rec/defcopy current-collection-write collection-write
   {collection-exists current-collection-exists
