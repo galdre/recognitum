@@ -1,0 +1,22 @@
+{:paths ["src" "resources"]
+
+ :deps {org.clojure/clojure {:mvn/version "1.12.5"}}
+
+ :aliases
+ {;; The Heist demo.
+  ;;   clojure -M:dev -m recognitum.demo
+  :dev {:extra-paths ["dev"]}
+
+  ;; Prints a table: each row times an operation on a recognitum type and on a hand-written
+  ;; defrecord that checks the same things, in nanoseconds per call, and their ratio.
+  ;;   clojure -M:bench -e "(require 'recognitum.bench)(recognitum.bench/run)"
+  :bench {:extra-paths ["bench"]}
+
+  ;;   clojure -X:test
+  ;; test/corpus holds one file per form the macros accept or refuse; recognitum.corpus-test
+  ;; loads each one.
+  :test {:extra-paths ["dev" "test" "test/corpus" "test/corpus/usage"]
+         :extra-deps {io.github.cognitect-labs/test-runner
+                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                      org.clojure/test.check {:mvn/version "1.1.1"}}
+         :exec-fn cognitect.test-runner.api/test}}}
