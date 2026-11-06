@@ -117,7 +117,8 @@
   write that changes one, or a method of its protocols or interfaces other than `toString`
   called with one, throws, with `:error` `:recognitum/displaced`. A write that changes nothing may return the value unchanged.
   `(rec/seal (rec/draft v))` proves such a value under the current definition."
-  {:arglists '([T [fields*] sections* method-sections*])}
+  {:arglists '([T [fields*] sections* method-sections*])
+   :style/indent [2 nil nil [:defn]]}
   [tname fields & sections]
   (define/defproven &env tname fields sections
     (assoc expansion :wiring `@(var wiring))))
@@ -132,7 +133,8 @@
 
   Clauses are those of [[defproven]], with the inputs in place of fields. Each check's id is a
   keyword in this namespace. Every input may be absent in a type that binds the bundle."
-  {:arglists '([name [inputs*] rec/checks clauses*])}
+  {:arglists '([name [inputs*] rec/checks clauses*])
+   :style/indent [2 nil nil [:defn]]}
   [bname inputs marker & clauses]
   (define/defchecks &env bname inputs marker clauses expansion))
 
@@ -140,12 +142,14 @@
   "Defines `new-name`, a copy of `bundle` whose checks are renamed by `names`, a map from each
   check of the bundle to its new name, which names every check exactly once. The copy's ids
   are keywords in this namespace; its checks keep their concerns."
+  {:style/indent 2}
   [new-name bundle names]
   (define/defcopy new-name bundle names))
 
 (defmacro defconcern
   "Defines the concern `name`: a clause marked `^::name` carries it, and a selection names its
   checks by the var or by the keyword `::name`."
+  {:style/indent 1}
   [name doc]
   (define/defconcern name doc))
 
@@ -180,6 +184,7 @@
 
 (defmacro when-extant
   "Inside a check body only: `(if (rec/extant? f) (do body...) true)`."
+  {:style/indent 1}
   [f & body]
   (when-not (contains? &env body/marker) (outside! &form "rec/when-extant"))
   `(if (extant? ~f) (do ~@body) true))

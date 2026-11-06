@@ -17,7 +17,7 @@ checked.
 Add the library to `deps.edn` as a git dependency:
 
 ```clojure
-{:deps {io.github.galdre/recognitum {:git/tag "v0.1.0"}}}
+{:deps {io.github.galdre/recognitum {:git/tag "v0.1.1"}}}
 ```
 
 A git dependency also needs the sha of its commit. Run `clj -X:deps git-resolve-tags` once:
@@ -482,6 +482,19 @@ to the macros.
 
 The configuration is on the classpath. To import it into a project, make the project's
 `.clj-kondo` directory and run `clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint`.
+
+The macros carry `:style/indent` metadata, which CIDER and clojure-lsp read to indent them as
+`defrecord` is indented (`clojure-lsp format` reads it with
+`--analysis '{:type :project-and-shallow-analysis}'`). With cljfmt alone, or Calva's formatter,
+add the same rules to `.cljfmt.edn`:
+
+```clojure
+{:extra-indents {recognitum.core/defproven   [[:block 2] [:inner 1]]
+                 recognitum.core/defchecks   [[:block 2] [:inner 1]]
+                 recognitum.core/defcopy     [[:block 2]]
+                 recognitum.core/defconcern  [[:block 1]]
+                 recognitum.core/when-extant [[:block 1]]}}
+```
 
 ## Coming
 
