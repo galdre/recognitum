@@ -137,10 +137,10 @@
   a write (`assoc`, `dissoc`, `merge`, `conj`, `into`) checks nothing. A key the type does not
   declare is refused at the write, as on a [[defproven]] value.
 
-      (rec/defproven-in Card [title ^:optional due]
+      (rec/defproven-in Ballot [choice ^:optional round]
         rec/checks
-        (title [] (string? title))
-        (due-later [] (rec/when-extant due (pos? due))))
+        (choice [] (string? choice))
+        (round-positive [] (rec/when-extant round (pos? round))))
 
   A value carries, in place, the checks that passed on its entries, and every holder sees what
   a run writes there: [[seal]], [[check]], [[recheck]], [[check-all]] and [[recheck-all]] run
@@ -167,12 +167,12 @@
   "Defines a bundle: a var holding checks over `inputs`, with the docstring `doc-string` if one
   is given, and one var per check.
 
-      (rec/defchecks collection-write
-        \"The checks of a write to a collection.\"
-        [user collection-id]
+      (rec/defchecks cast-into-box
+        \"The checks of a cast into a ballot box.\"
+        [voter ballot-box-id]
         rec/checks
-        (collection-exists [] (some? (rec/fetch db/collections collection-id)))
-        (may-write [collection-exists] (db/can-write? user collection-id)))
+        (box-exists [] (some? (rec/fetch db/ballot-boxes ballot-box-id)))
+        (may-cast [box-exists] (db/can-cast? voter ballot-box-id)))
 
   Clauses are those of [[defproven]], with the inputs in place of fields, and none takes
   `:override`. Each check's id is a

@@ -2,27 +2,27 @@
 ;; clojure.set is required, for `missing`.
 ;; expect {:report []}
 (ns app.flows
-  (:require [recognitum.core :as rec] [app.card :as card] [app.dashboard :as dash]
+  (:require [recognitum.core :as rec] [app.ballot :as ballot] [app.tally :as tally]
             [app.contexts :refer [importing]] [app.perms :as perms] [clojure.set]))
 
 ;; helpers the checks use
 (defn store! [x] x)
 
-(defn import-all [{:keys [cards dashboards]}]                        ; construction checks nothing
-  (concat (map #(rec/seal (card/map->Card %) importing) cards)
-          (map #(rec/seal (dash/map->Dashboard %) importing) dashboards)))
+(defn import-all [{:keys [ballots tallies]}]                         ; construction checks nothing
+  (concat (map #(rec/seal (ballot/map->Ballot %) importing) ballots)
+          (map #(rec/seal (tally/map->Tally %) importing) tallies)))
 
-(defn create-card [row user]
-  (-> (card/map->Card row) (assoc ::card/acting-user user) (rec/seal rec/every)))
+(defn create-ballot [row voter]
+  (-> (ballot/map->Ballot row) (assoc ::ballot/cast-by voter) (rec/seal rec/every)))
 
-(defn rename [c new-name]
-  (-> c (assoc ::card/name new-name) (rec/seal rec/every)))         ; reruns name only
+(defn change-choice [b new-choice]
+  (-> b (assoc ::ballot/choice new-choice) (rec/seal rec/every)))    ; reruns choice only
 
-(defn revalidate! [cards]
-  (rec/check-all cards rec/pure))                                    ; no source is called
+(defn revalidate! [ballots]
+  (rec/check-all ballots rec/pure))                                  ; no source is called
 
-(defn after-permission-change! [cards dashboards]
-  (rec/check-all (concat cards dashboards) perms/may-write))         ; one id in both types
+(defn after-permission-change! [ballots tallies]
+  (rec/check-all (concat ballots tallies) perms/may-cast))           ; one id in both types
 
 (defn publish! [x]
   {:pre [(rec/proves? x rec/every)]}

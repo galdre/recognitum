@@ -5,8 +5,8 @@
 ;;                   :kondo "^::permission on Labelled: a clause takes no metadata; its concerns and :override go after its waits, as in (name [waits] ::permission body)"}]
 ;;         :cold :same}
 (ns extra.e55-metadata-on-marker (:require [recognitum.core :as rec]))
-(rec/defconcern permission "Checks on the acting user's rights.")
+(rec/defconcern permission "Checks on the voter's rights.")
 (defprotocol Labelled (label [x]))
-(rec/defproven-in Card [id]
+(rec/defproven-in Ballot [id]
   ^::permission rec/checks (never [] (= id :never))
-  ^::permission Labelled (label [_] "card"))
+  ^::permission Labelled (label [_] "ballot"))

@@ -4,4 +4,4 @@
 ;;         :kondo []
 ;;         :cold []}
 (ns mistakes.m10b (:require [recognitum.core :as rec] [app.db :as db]))
-(defn lookup-all [ids] (map (partial rec/fetch db/collections) ids))
+(defn lookup-all [ids] (map (partial rec/fetch db/ballot-boxes) ids))

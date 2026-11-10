@@ -4,9 +4,9 @@
   (:require [recognitum.core :as rec] [app.perms :as perms] [app.db :as db]))
 
 (rec/defcontext importing
-  "Serialization import: no acting user; everything else must hold."
+  "Serialization import: no voter; everything else must hold."
   (rec/except rec/every perms/permission))
 
-(rec/defcontext collections-down
-  "The collections table is offline."
-  (rec/except rec/every (rec/fetching db/collections)))
+(rec/defcontext ballot-boxes-down
+  "The ballot boxes table is offline."
+  (rec/except rec/every (rec/fetching db/ballot-boxes)))

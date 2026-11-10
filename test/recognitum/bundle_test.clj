@@ -4,93 +4,93 @@
   (:require
    [clojure.test :refer [deftest is testing]]
    [recognitum.core :as rec]
-   [recognitum.example.card :as card]
+   [recognitum.example.ballot :as ballot]
    [recognitum.example.db :as db]
    [recognitum.example.perms :as perms])
   (:import
-   (recognitum.example.card Card Dashboard)))
+   (recognitum.example.ballot Ballot Tally)))
 
 (defn- failed [f]
   (try (f) nil (catch clojure.lang.ExceptionInfo e (:failed (ex-data e)))))
 
-(def row {::card/id 1 ::card/name "Plan" ::card/collection-id 1 ::card/archived false
-          ::card/acting-user "ann"})
+(def row {::ballot/id 1 ::ballot/choice "Yes" ::ballot/ballot-box-id 1 ::ballot/spoiled false
+          ::ballot/cast-by "ann"})
 
 (deftest a-bundle-is-a-var-and-each-check-a-var-with-its-id
-  (is (= [:recognitum.example.perms/collection-exists :recognitum.example.perms/may-write]
-         (mapv :id [perms/collection-exists perms/may-write])))
-  (is (= "the acting user may write to the collection" (:doc (meta #'perms/may-write))))
-  (is (= #{::perms/permission} (:concerns perms/may-write))))
+  (is (= [:recognitum.example.perms/box-exists :recognitum.example.perms/may-cast]
+         (mapv :id [perms/box-exists perms/may-cast])))
+  (is (= "the voter may cast into the ballot box" (:doc (meta #'perms/may-cast))))
+  (is (= #{::perms/permission} (:concerns perms/may-cast))))
 
 (deftest a-bound-bundle-reads-its-inputs-from-the-fields
-  (is (instance? Card (card/map->Card row)))
-  (is (= {:data false :doc "the acting user may write to the collection"
-          :blocked #{::card/moves-only-where-allowed}}
-         (::perms/may-write (failed #(card/map->Card (assoc row ::card/acting-user "bob")))))))
+  (is (instance? Ballot (ballot/map->Ballot row)))
+  (is (= {:data false :doc "the voter may cast into the ballot box"
+          :blocked #{::ballot/moves-only-where-allowed}}
+         (::perms/may-cast (failed #(ballot/map->Ballot (assoc row ::ballot/cast-by "bob")))))))
 
 (deftest an-input-whose-field-is-absent-is-absent
-  (is (= {:absent :user} (:data (::perms/may-write (failed #(card/map->Card (dissoc row ::card/acting-user))))))))
+  (is (= {:absent :voter} (:data (::perms/may-cast (failed #(ballot/map->Ballot (dissoc row ::ballot/cast-by))))))))
 
 (deftest when-extant-skips-a-binding-as-passing
-  (testing "no stored collection: the copy's checks pass without running"
-    (is (contains? (rec/proven-checks (card/map->Card row)) ::perms/current-may-write)))
-  (testing "a stored collection runs them"
-    (is (= #{::perms/current-may-write}
-           (set (keys (failed #(card/map->Card (assoc row ::card/stored-collection-id 2))))))))
+  (testing "no stored ballot box: the copy's checks pass without running"
+    (is (contains? (rec/proven-checks (ballot/map->Ballot row)) ::perms/stored-may-cast)))
+  (testing "a stored ballot box runs them"
+    (is (= #{::perms/stored-may-cast}
+           (set (keys (failed #(ballot/map->Ballot (assoc row ::ballot/stored-ballot-box-id 2))))))))
   (testing "writing the field later runs the binding it gated"
-    (let [c (card/map->Card row)]
-      (is (instance? Card (assoc c ::card/stored-collection-id 3)))
-      (is (contains? (failed #(assoc c ::card/stored-collection-id 2)) ::perms/current-may-write)))))
+    (let [c (ballot/map->Ballot row)]
+      (is (instance? Ballot (assoc c ::ballot/stored-ballot-box-id 3)))
+      (is (contains? (failed #(assoc c ::ballot/stored-ballot-box-id 2)) ::perms/stored-may-cast)))))
 
 (deftest a-copy-has-its-own-ids-in-its-namespace-and-keeps-concerns
-  (is (= ::perms/current-may-write (:id perms/current-may-write)))
-  (is (= #{::perms/permission} (:concerns perms/current-may-write)))
-  (is (= #{::perms/current-collection-exists} (:waits perms/current-may-write))))
+  (is (= ::perms/stored-may-cast (:id perms/stored-may-cast)))
+  (is (= #{::perms/permission} (:concerns perms/stored-may-cast)))
+  (is (= #{::perms/stored-box-exists} (:waits perms/stored-may-cast))))
 
 (deftest an-override-keeps-the-id-and-concerns
-  (let [d (card/map->Dashboard {::card/id 1 ::card/title "Board" ::card/collection-id 2 ::card/acting-user "cy"})]
-    (is (instance? Dashboard d))
-    (is (= #{::perms/may-write} (rec/checks-of perms/permission d)))
-    (is (= "dashboards also allow the collection's curators"
-           (:doc (::perms/may-write (failed #(assoc d ::card/acting-user "dee"))))))))
+  (let [d (ballot/map->Tally {::ballot/id 1 ::ballot/label "Turnout" ::ballot/ballot-box-id 2 ::ballot/counted-by "cy"})]
+    (is (instance? Tally d))
+    (is (= #{::perms/may-cast} (rec/checks-of perms/permission d)))
+    (is (= "tallies also allow the ballot box's tellers"
+           (:doc (::perms/may-cast (failed #(assoc d ::ballot/counted-by "dee"))))))))
 
 (deftest an-override-inherits-its-bindings-when-extant
-  (let [T (binding [*ns* (the-ns 'recognitum.example.card)]
-            (eval '(rec/defproven Gated [id ^:optional acting-user ^:optional stored-collection-id]
-                     ^{:when-extant stored-collection-id}
-                     perms/current-collection-write
-                     (user [] acting-user)
-                     (collection-id [] stored-collection-id)
+  (let [T (binding [*ns* (the-ns 'recognitum.example.ballot)]
+            (eval '(rec/defproven Gated [id ^:optional cast-by ^:optional stored-ballot-box-id]
+                     ^{:when-extant stored-ballot-box-id}
+                     perms/cast-into-stored-box
+                     (voter [] cast-by)
+                     (ballot-box-id [] stored-ballot-box-id)
                      rec/checks
-                     (perms/current-may-write [] :override false))))
-        make @(ns-resolve 'recognitum.example.card 'map->Gated)]
-    (is (instance? T (make {::card/id 1})) "skipped where the gate field is absent")
-    (is (contains? (failed #(make {::card/id 1 ::card/stored-collection-id 1})) ::perms/current-may-write))))
+                     (perms/stored-may-cast [] :override false))))
+        make @(ns-resolve 'recognitum.example.ballot 'map->Gated)]
+    (is (instance? T (make {::ballot/id 1})) "skipped where the gate field is absent")
+    (is (contains? (failed #(make {::ballot/id 1 ::ballot/stored-ballot-box-id 1})) ::perms/stored-may-cast))))
 
 (deftest waits-name-bundle-checks
   (testing "a check that waits on a failed bundle check is blocked by it"
-    (is (= #{::card/moves-only-where-allowed}
-           (:blocked (::perms/may-write (failed #(card/map->Card (assoc row ::card/acting-user "bob"))))))))
+    (is (= #{::ballot/moves-only-where-allowed}
+           (:blocked (::perms/may-cast (failed #(ballot/map->Ballot (assoc row ::ballot/cast-by "bob"))))))))
   (testing "selections name bundle checks and bundles by their vars"
-    (is (= #{::perms/may-write ::perms/current-may-write}
-           (rec/checks-of (rec/union perms/may-write perms/current-may-write) Card)))
-    (is (= #{::perms/collection-exists ::perms/may-write} (rec/checks-of perms/collection-write Card)))))
+    (is (= #{::perms/may-cast ::perms/stored-may-cast}
+           (rec/checks-of (rec/union perms/may-cast perms/stored-may-cast) Ballot)))
+    (is (= #{::perms/box-exists ::perms/may-cast} (rec/checks-of perms/cast-into-box Ballot)))))
 
 (deftest a-bundle-check-waits-on-the-shape-checks-of-the-fields-its-inputs-read
   (reset! db/calls [])
-  (let [e (try (card/map->Card (assoc row ::card/collection-id "one"))
+  (let [e (try (ballot/map->Ballot (assoc row ::ballot/ballot-box-id "one"))
                (catch clojure.lang.ExceptionInfo e (ex-data e)))]
-    (is (= #{::card/collection-id} (set (keys (:failed e)))))
-    (is (every? (:blocked e) [::perms/collection-exists ::perms/may-write ::card/owner-active
-                              ::card/moves-only-where-allowed]))
-    (is (empty? @db/calls) "nothing read the collection")))
+    (is (= #{::ballot/ballot-box-id} (set (keys (:failed e)))))
+    (is (every? (:blocked e) [::perms/box-exists ::perms/may-cast ::ballot/officer-active
+                              ::ballot/moves-only-where-allowed]))
+    (is (empty? @db/calls) "nothing read the ballot box")))
 
 (deftest a-check-reads-a-source-keyed-by-another-read
-  (is (= {:data false :doc "the collection's owner is active" :blocked #{}}
-         (::card/owner-active (failed #(card/map->Card (assoc row ::card/collection-id 3 ::card/acting-user "ann"))))))
+  (is (= {:data false :doc "the ballot box's officer is active" :blocked #{}}
+         (::ballot/officer-active (failed #(ballot/map->Ballot (assoc row ::ballot/ballot-box-id 3 ::ballot/cast-by "ann"))))))
   (reset! db/calls [])
-  (card/map->Card row)
-  (is (some #(= :users (first %)) @db/calls)))
+  (ballot/map->Ballot row)
+  (is (some #(= :officers (first %)) @db/calls)))
 
 (def ^:private clause-runs (atom []))
 
@@ -143,15 +143,15 @@
                         rec/checks (c [recognitum.bundle-test/positives] true))))
       "qualified, the wait is accepted"))
 
-(rec/defcopy other-collection-write perms/collection-write
-  {collection-exists other-collection-exists
-   may-write         other-may-write})
+(rec/defcopy other-cast-into-box perms/cast-into-box
+  {box-exists other-box-exists
+   may-cast   other-may-cast})
 
 (deftest a-copys-ids-are-in-the-namespace-of-the-copy
-  (is (= [::other-collection-exists ::other-may-write]
-         (mapv :id [other-collection-exists other-may-write])))
-  (is (= #{::other-collection-exists} (:waits other-may-write)))
-  (is (= #{::perms/permission} (:concerns other-may-write))))
+  (is (= [::other-box-exists ::other-may-cast]
+         (mapv :id [other-box-exists other-may-cast])))
+  (is (= #{::other-box-exists} (:waits other-may-cast)))
+  (is (= #{::perms/permission} (:concerns other-may-cast))))
 
 (deftest a-qualified-clause-replaces-a-bundle-check-only-when-marked
   (is (= (str "recognitum.bundle-test/x-positive is qualified:"
@@ -186,15 +186,15 @@
          (refusal '(rec/defchecks waits-wide [a] rec/checks (x [y] a))))))
 
 (deftest a-copy-takes-a-map-of-plain-names
-  (let [said (str "defcopy takes a map from each check of perms/collection-write to its new name:"
+  (let [said (str "defcopy takes a map from each check of perms/cast-into-box to its new name:"
                   " {check new-name ...}")]
-    (is (= said (refusal '(rec/defcopy named-by-string perms/collection-write
-                            {collection-exists "c-exists" may-write c-may-write}))))
-    (is (= said (refusal '(rec/defcopy named-qualified perms/collection-write
-                            {collection-exists a/c-exists may-write c-may-write}))))))
+    (is (= said (refusal '(rec/defcopy named-by-string perms/cast-into-box
+                            {box-exists "c-exists" may-cast c-may-cast}))))
+    (is (= said (refusal '(rec/defcopy named-qualified perms/cast-into-box
+                            {box-exists a/c-exists may-cast c-may-cast}))))))
 
 (deftest a-copy-redefines-no-check-of-another-bundle-here
-  (is (= "new name other-may-write would redefine recognitum.bundle-test/other-may-write"
-         (refusal '(rec/defcopy third-collection-write perms/collection-write
-                     {collection-exists third-collection-exists may-write other-may-write}))))
-  (is (= `other-collection-write (:bundle other-may-write)) "the other bundle's check is unchanged"))
+  (is (= "new name other-may-cast would redefine recognitum.bundle-test/other-may-cast"
+         (refusal '(rec/defcopy third-cast-into-box perms/cast-into-box
+                     {box-exists third-box-exists may-cast other-may-cast}))))
+  (is (= `other-cast-into-box (:bundle other-may-cast)) "the other bundle's check is unchanged"))

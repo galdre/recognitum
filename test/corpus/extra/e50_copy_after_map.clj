@@ -3,6 +3,6 @@
 ;;                   :kondo "rec/defcopy takes a map {check new-check ...} after the bundle, and nothing after it"}]
 ;;         :cold :same}
 (ns extra.e50-copy-after-map (:require [recognitum.core :as rec] [app.perms :as perms]))
-(rec/defcopy current-collection-write "A copy with a stray form."
-  perms/collection-write {collection-exists current-exists may-write current-may-write}
+(rec/defcopy cast-into-stored-box "A copy with a stray form."
+  perms/cast-into-box {box-exists stored-exists may-cast stored-may-cast}
   :stray)

@@ -7,6 +7,6 @@
 ;;                   :kondo "rec/when-extant is allowed only inside a check body"}]
 ;;         :cold :same}
 (ns extra.e04-reads-outside-body (:require [recognitum.core :as rec] [app.db :as db]))
-(defn lookup-all [ids] (rec/fetch-each db/collections ids))
+(defn lookup-all [ids] (rec/fetch-each db/ballot-boxes ids))
 (defn present? [x] (rec/extant? x))
 (defn maybe-check [x] (rec/when-extant x (string? x)))

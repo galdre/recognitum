@@ -5,7 +5,7 @@
 ;;                   :kondo ":override on always: a bundle's check replaces no check; :override is for a clause of a type that replaces a check of a bound bundle"}]
 ;;         :cold :same}
 (ns extra.e57-unknown-flag (:require [recognitum.core :as rec]))
-(rec/defproven-in Card [id]
+(rec/defproven-in Ballot [id]
   rec/checks (never [] :permission (= id :never)))
-(rec/defchecks card-checks [id]
+(rec/defchecks ballot-checks [id]
   rec/checks (always [] :override (some? id)))

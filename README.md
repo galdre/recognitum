@@ -294,26 +294,26 @@ A **bundle** is a group of checks over named inputs, defined once and bound into
 (ns app.perms
   (:require [recognitum.core :as rec] [app.db :as db]))
 
-(rec/defconcern permission "Checks on the acting user's rights.")
+(rec/defconcern permission "Checks on the voter's rights.")
 
-(rec/defchecks collection-write
-  "The checks of a write to a collection."
-  [user collection-id]
+(rec/defchecks cast-into-box
+  "The checks of a cast into a ballot box."
+  [voter ballot-box-id]
   rec/checks
-  (collection-exists []
-    "the collection is on file"
-    (some? (rec/fetch db/collections collection-id)))
+  (box-exists []
+    "the ballot box is on file"
+    (some? (rec/fetch db/ballot-boxes ballot-box-id)))
 
-  (may-write [collection-exists] ::permission
-    "the acting user may write to the collection"
-    (db/can-write? user (rec/fetch db/collections collection-id))))
+  (may-cast [box-exists] ::permission
+    "the voter may cast into the ballot box"
+    (db/can-cast? voter (rec/fetch db/ballot-boxes ballot-box-id))))
 
-(rec/defcopy current-collection-write collection-write
-  {collection-exists current-collection-exists
-   may-write         current-may-write})
+(rec/defcopy cast-into-stored-box cast-into-box
+  {box-exists stored-box-exists
+   may-cast   stored-may-cast})
 ```
 
-- `defchecks` defines the bundle var and one var per check: `perms/may-write`. A docstring
+- `defchecks` defines the bundle var and one var per check: `perms/may-cast`. A docstring
   after the bundle's name is the bundle var's, and one after a check's waits is the check's.
 - `defconcern` defines a concern. A clause carries it when `::permission` follows the clause's
   waits; several concerns are written as a set, `#{::permission ::audit}`. A keyword or set
@@ -327,26 +327,26 @@ A type binds a bundle with the bundle's var followed by one `(input [] expressio
 input, each an expression of the type's fields:
 
 ```clojure
-(rec/defproven Card [id name collection-id archived
-                     ^:optional acting-user ^:optional stored-collection-id]
-  perms/collection-write
-  (user          [] acting-user)
-  (collection-id [] collection-id)
+(rec/defproven Ballot [id choice ballot-box-id spoiled
+                       ^:optional cast-by ^:optional stored-ballot-box-id]
+  perms/cast-into-box
+  (voter         [] cast-by)
+  (ballot-box-id [] ballot-box-id)
 
-  ^{:when-extant stored-collection-id}
-  perms/current-collection-write
-  (user          [] acting-user)
-  (collection-id [] stored-collection-id)
+  ^{:when-extant stored-ballot-box-id}
+  perms/cast-into-stored-box
+  (voter         [] cast-by)
+  (ballot-box-id [] stored-ballot-box-id)
 
   rec/checks
-  (name [] (non-blank? name))
-  (moves-only-where-allowed [perms/may-write perms/current-may-write] ::perms/permission true))
+  (choice [] (non-blank? choice))
+  (moves-only-where-allowed [perms/may-cast perms/stored-may-cast] ::perms/permission true))
 ```
 
 - An input clause runs only when a check that reads its input runs, once for each such
   check. A check its waits block runs none.
-- An input whose clause reads an absent field is absent: here, a card with no acting user
-  fails `may-write` with `{:absent :user}`, the input's key. A throw from a clause propagates
+- An input whose clause reads an absent field is absent: here, a ballot with no `cast-by`
+  fails `may-cast` with `{:absent :voter}`, the input's key. A throw from a clause propagates
   as a throw from a body does.
 - A bundle check reads the fields that the clauses of its inputs read, so it waits on their
   shape checks.
@@ -354,13 +354,13 @@ input, each an expression of the type's fields:
   is absent. A later write of `f` runs them.
 - In a bundle's body, `rec/extant?` and `rec/when-extant` take an input as a type's body takes
   a field. In an input clause they take a field, with the same meaning: so
-  `(user [] (rec/when-extant acting-user acting-user))` gives `true` where the field is absent.
-  To pass an absent field on as an absent input, read it: `(user [] acting-user)`.
+  `(voter [] (rec/when-extant cast-by cast-by))` gives `true` where the field is absent.
+  To pass an absent field on as an absent input, read it: `(voter [] cast-by)`.
 - A wait names an own check by its bare name, a bundle check by its qualified var, or every
-  check of a bundle by the bundle's qualified var: `perms/may-write`, or `app.card/positives`
+  check of a bundle by the bundle's qualified var: `perms/may-cast`, or `app.ballot/positives`
   for a bundle `positives` defined in the type's own namespace. A bare `positives` is read as
   an own check, and refused.
-- `(perms/may-write [waits] :override body)` in `rec/checks` replaces that check of a bound
+- `(perms/may-cast [waits] :override body)` in `rec/checks` replaces that check of a bound
   bundle with a body over the type's fields. It keeps the check's id and concerns, and its
   binding's `:when-extant`. With concerns of its own, it is written in one set:
   `#{:override ::audit}`.
@@ -438,7 +438,7 @@ A **selection** names some of a type's checks:
 |---|---|
 | `::cuts-sum-to-take` | that check |
 | `perms/permission`, `::perms/permission` | the checks carrying the concern |
-| `perms/collection-write`, `perms/may-write` | a bundle's checks, or one of them |
+| `perms/cast-into-box`, `perms/may-cast` | a bundle's checks, or one of them |
 | `rec/every`, `rec/shape`, `rec/pure` | every check, every shape check, every check that reads no source |
 | `(rec/fetching house/vetted)` | the checks that read that source |
 | `(rec/reading ::crew)` | the checks that read that field, directly or through an input |

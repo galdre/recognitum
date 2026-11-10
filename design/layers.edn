@@ -32,17 +32,17 @@
          demo.orders                                #{recognitum.core demo.show}
          recognitum.example.db                      #{}
          recognitum.example.perms                   #{recognitum.core recognitum.example.db}
-         recognitum.example.card                    #{recognitum.core recognitum.example.db recognitum.example.perms}
+         recognitum.example.ballot                  #{recognitum.core recognitum.example.db recognitum.example.perms}
 
          ;; the bench rows: the library against a hand-written twin, and the engine against a naive one
          recognitum.bench                           #{recognitum.core}
          recognitum.engine-bench                    #{recognitum.engine}
 
          recognitum.body-test                       #{recognitum.core}
-         recognitum.bundle-test                     #{recognitum.core recognitum.example.card recognitum.example.db
+         recognitum.bundle-test                     #{recognitum.core recognitum.example.ballot recognitum.example.db
                                                       recognitum.example.perms}
          ;; counts the engine's runs by redefining recognitum.engine/run-all
-         recognitum.check-test                      #{recognitum.core recognitum.engine recognitum.example.card
+         recognitum.check-test                      #{recognitum.core recognitum.engine recognitum.example.ballot
                                                       recognitum.example.db recognitum.example.perms demo.heist}
          recognitum.corpus-test                     #{}
          recognitum.demo-test                       #{recognitum.core demo.heist-run demo.potion demo.potion-run}

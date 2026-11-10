@@ -3,18 +3,18 @@
 (ns app.perms
   (:require [recognitum.core :as rec] [app.db :as db]))
 
-(rec/defconcern permission "Checks on the acting user's rights.")
+(rec/defconcern permission "Checks on the voter's rights.")
 
-(rec/defchecks collection-write [user collection-id]
+(rec/defchecks cast-into-box [voter ballot-box-id]
   rec/checks
-  (collection-exists []
-    "the collection is on file"
-    (some? (rec/fetch db/collections collection-id)))
+  (box-exists []
+    "the ballot box is on file"
+    (some? (rec/fetch db/ballot-boxes ballot-box-id)))
 
-  (may-write [collection-exists] ::permission
-    "the acting user may write to the collection"
-    (db/can-write? user (rec/fetch db/collections collection-id))))   ; user absent: throws, so fails
+  (may-cast [box-exists] ::permission
+    "the voter may cast into the ballot box"
+    (db/can-cast? voter (rec/fetch db/ballot-boxes ballot-box-id))))   ; voter absent: throws, so fails
 
-(rec/defcopy current-collection-write collection-write
-  {collection-exists current-collection-exists
-   may-write         current-may-write})
+(rec/defcopy cast-into-stored-box cast-into-box
+  {box-exists stored-box-exists
+   may-cast   stored-may-cast})

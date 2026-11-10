@@ -3,4 +3,4 @@
 ;;                   :kondo "rec/fetch is allowed only inside a check body"}]
 ;;         :cold :same}
 (ns mistakes.m10a (:require [recognitum.core :as rec] [app.db :as db]))
-(defn lookup [id] (rec/fetch db/collections id))
+(defn lookup [id] (rec/fetch db/ballot-boxes id))

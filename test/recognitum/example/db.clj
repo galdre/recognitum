@@ -4,18 +4,18 @@
 (defonce calls (atom []))
 
 (def ^:private tables
-  {:collections {1 {:owner-id 10 :writers #{"ann"} :curators #{}}
-                 2 {:owner-id 11 :writers #{"bob"} :curators #{"cy"}}
-                 3 {:owner-id 12 :writers #{"ann" "bob"} :curators #{}}}
-   :users {10 {:active? true} 11 {:active? true} 12 {:active? false}}})
+  {:ballot-boxes {1 {:officer-id 10 :voters #{"ann"} :tellers #{}}
+                  2 {:officer-id 11 :voters #{"bob"} :tellers #{"cy"}}
+                  3 {:officer-id 12 :voters #{"ann" "bob"} :tellers #{}}}
+   :officers {10 {:active? true} 11 {:active? true} 12 {:active? false}}})
 
 (defn- source [table]
   (fn [ks]
     (swap! calls conj [table ks])
     (select-keys (tables table) ks)))
 
-(def collections "A source: collection id to collection." (source :collections))
-(def users "A source: user id to user." (source :users))
+(def ballot-boxes "A source: ballot box id to ballot box." (source :ballot-boxes))
+(def officers "A source: officer id to officer." (source :officers))
 
-(defn can-write? [user coll] (contains? (:writers coll) user))
-(defn can-curate? [user coll] (contains? (:curators coll) user))
+(defn can-cast? [voter box] (contains? (:voters box) voter))
+(defn can-tally? [voter box] (contains? (:tellers box) voter))
