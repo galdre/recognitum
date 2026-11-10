@@ -10,4 +10,4 @@
   renamed (label [] subtitle)
   rec/checks
   (after-named [extra.e24-override-of-copy-no-cycle/named] (some? title))
-  ^:override (extra.e24-override-of-copy-no-cycle/retitled [after-named] (string? subtitle)))
+  (extra.e24-override-of-copy-no-cycle/retitled [after-named] :override (string? subtitle)))

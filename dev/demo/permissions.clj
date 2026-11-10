@@ -1,4 +1,4 @@
-(ns recognitum.permissions
+(ns demo.permissions
   "An in-memory permission service: who may refund which order, and how much each person may
   refund. It logs every call, so a caller can see what a check asked and how often.")
 

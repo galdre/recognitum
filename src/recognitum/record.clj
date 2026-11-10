@@ -10,6 +10,10 @@
   throws. A **draft** is an unchecked map of a type that remembers which checks pass on its
   entries; a write to it forgets the checks that read a key written.
 
+  A type defined with `:unsealed true` has no sealed values and no drafts. Its values are
+  made and written without checks and carry, in place, what a draft remembers: the checks
+  that passed on their entries. Such a value is never sealed; [[proves?]] asks its memory.
+
   Every type is closed: a sealed value refuses a key its type does not declare, and a draft
   holding one does not seal. A required field must be present in a sealed value.
 
@@ -34,7 +38,8 @@
 
 ;; What a draft remembers: the checks `passes` that pass on the entries of `base`, as `proof`
 ;; shows, and the keys `written` since. `proof` is a sealed value of `type` that is `base`
-;; itself, so every check passes, or a draft of the type's proof strategy marked with
+;; itself, so every check passes (never of an unsealed type, whose `Hot` names a class nothing is
+;; an instance of), or a draft of the type's proof strategy marked with
 ;; `(PassKey base passes mask)`; nil where nothing passes. `mask` is `passes` as a mask (see
 ;; [[Hot]]), or nil for a type of more than 64 checks.
 (deftype Memo [type base passes written proof mask])
@@ -234,7 +239,8 @@
   [x]
   (cond (class? x)  (type-of-class x)
         (draft? x)  (draft-type (marks-of x))
-        (and (map? x) (contains? x ::class)) x
+        ;; a sorted map's comparator may refuse the key, and no type is a sorted map
+        (and (map? x) (not (sorted? x)) (contains? x ::class)) x
         (nil? x)    nil
         :else       (type-of-class (class x))))
 
@@ -242,6 +248,20 @@
   (or (type-of x)
       (throw (ex-info (str "not a value, a draft or a class of a recognitum type: " (pr-str x))
                       {:error :recognitum/not-a-type :value x}))))
+
+(defn- refuse-type!
+  "Refuses `x` where `x` is `t`'s class or `t` itself, a type given where a value belongs."
+  [x t]
+  (when (or (class? x) (identical? x t))
+    (throw (ex-info (str "a type was given where a value belongs: " (:name t))
+                    {:error :recognitum/not-a-value :type (:name t)}))))
+
+(defn- value-type!
+  "The type of `x`, a value or a draft; refuses anything else, a type included."
+  [x]
+  (let [t (type-of! x)]
+    (refuse-type! x t)
+    t))
 
 (defn- gate
   "The type's installed write. Each arity runs the checks it stands for. [[define-type]] keeps
@@ -370,6 +390,31 @@
                 " definition: (rec/seal (rec/draft v))")
            {:error :recognitum/displaced :type tname :value v}))
 
+(defn- displaced-unsealed
+  "The refusal of a write, a method or a run of checks on `v`, a value of the unsealed type
+  named `tname`, where a later definition has displaced the one `v` belongs to."
+  [tname v]
+  (ex-info (str tname " was redefined: this value is of an earlier definition, so it proves nothing"
+                " and refuses writes, its type's methods and every run of checks. To make a value of"
+                " the current definition: (" (namespace tname) "/map->" (name tname) " (into {} v))")
+           {:error :recognitum/displaced :type tname :value v}))
+
+(defn- no-drafts
+  "The refusal to open, clean or draft anything of the unsealed type named `tname`."
+  [tname]
+  (ex-info (str tname " has no drafts: its values check nothing when made or written, and remember"
+                " in place what passed. Make one with " (namespace tname) "/map->" (name tname)
+                ", and run its checks with rec/check or rec/seal")
+           {:error :recognitum/no-drafts :type tname}))
+
+(defn- no-definition
+  "The refusal to draft `v`, a value of a displaced definition of the type named `tname`, where
+  that name no longer names a current definition of the type."
+  [tname v]
+  (ex-info (str tname " has no current definition: this value is of a displaced definition, and"
+                " its name no longer names a definition of the type, so it has no drafts")
+           {:error :recognitum/no-current-definition :type tname :value v}))
+
 (defn- displaced-constructor
   "The refusal of a constructor of the type named `tname`, held from before a later definition
   displaced the one it makes. `remedy`, if given, says what to call instead of the current
@@ -487,7 +532,7 @@
                     {} inputs))))
 
 (defn- with-meta-of
-  "Map `m` with the meta of `x`: `m` itself where it holds that meta already."
+  "`m` with the meta of `x`: `m` itself where it holds that meta already."
   [m x]
   (let [mx (meta x)]
     (if (identical? mx (meta m)) m (with-meta m mx))))
@@ -792,18 +837,24 @@
   [spec {:keys [strategy define run-all runner]}]
   (let [displaced (named-now (:name spec))
         current (volatile! true)
+        unsealed? (true? (:unsealed spec))
         h (proof/define-type strategy (:name spec)
-            {:keys (mapv :key (:fields spec))
-             :interfaces (vec (:interfaces spec))
-             :methods (let [refuse (fn [v] (throw (displaced-refusal (:name spec) v)))]
-                        (into {} (for [[[n ps :as sig] make] (:methods spec)]
-                                   [sig (if (and (= "toString" n) (empty? ps))
-                                          (make (volatile! true) refuse)
-                                          (make current refuse))])))})
+            (cond-> {:keys (mapv :key (:fields spec))
+                     :interfaces (vec (:interfaces spec))
+                     :methods (let [refuse (fn [v] (throw (if unsealed?
+                                                            (displaced-unsealed (:name spec) v)
+                                                            (displaced-refusal (:name spec) v))))]
+                                (into {} (for [[[n ps :as sig] make] (:methods spec)]
+                                           [sig (if (and (= "toString" n) (empty? ps))
+                                                  (make (volatile! true) refuse)
+                                                  (make current refuse))])))}
+              unsealed? (assoc :unsealed true)))
         [vc dc] (proof/classes h)
         type (let [t (compile-type spec strategy define run-all runner)]
-               (assoc t ::class vc ::draft-class dc ::gate (volatile! nil)
-                      ::hot (hot-of vc dc strategy (:ids t) (:readers t) (::readers-v t))))
+               ;; an unsealed type's memories never show every check passing through a value of
+               ;; its class: its `Hot` names Void, of which nothing is an instance
+               (assoc t ::class vc ::draft-class dc ::gate (volatile! nil) ::unsealed unsealed?
+                      ::hot (hot-of (if unsealed? Void vc) dc strategy (:ids t) (:readers t) (::readers-v t))))
         ids (:ids type)
         ^Hot hot (::hot type)
         masks? (some? (.-bits hot))
@@ -873,6 +924,24 @@
         own-draft (fn [d]
                     (let [m (own-memo d)]
                       [(.-data ^Draft d) (passes type (.-data ^Draft d) m) m]))
+        ;; the memory cell of `v`, a value of this unsealed type's current definition
+        own-value (fn [v]
+                    (when-not (instance? vc v)
+                      (throw (ex-info (str "not a value of " (:name type) ": " (pr-str v))
+                                      {:error :recognitum/not-a-value :type (:name type)})))
+                    (when-not (.deref ^clojure.lang.Volatile current)
+                      (throw (displaced-unsealed (:name type) v)))
+                    (proof/memory strategy v))
+        ;; what a run reads of `x`, a draft or a value of this unsealed type: its entries, what
+        ;; it passes, its memory, and the cell that holds the memory
+        own-subject (fn [x]
+                      (if unsealed?
+                        (let [cell (own-value x)
+                              m @cell]
+                          [x (passes type x m) m cell])
+                        (let [m (own-memo x)
+                              data (.-data ^Draft x)]
+                          [data (passes type data m) m (.-cell ^Draft x)])))
         ;; a draft's entries, what it passes, its memory, and whether it passes every check:
         ;; through the mask where the type has one
         ;; each mask of passing checks asked for, to a run of the checks it leaves: the runner
@@ -905,17 +974,16 @@
         ;; another run has written since, it only forgets what failed and `forget`: a pass it
         ;; found may predate a forget written since.
         remember! (fn remember!
-                    ([d m0 known to-run result] (remember! d m0 known to-run result ()))
-                    ([^Draft d m0 known to-run result forget]
-                     (let [data (.-data d)
-                           failed (keys (:failed result))]
+                    ([cell data m0 known to-run result] (remember! cell data m0 known to-run result ()))
+                    ([cell data m0 known to-run result forget]
+                     (let [failed (keys (:failed result))]
                        (when-not (or (and (empty? to-run) (empty? forget))
-                                     (compare-and-set! (.-cell d) m0
+                                     (compare-and-set! cell m0
                                                        (memo data (reduce disj
                                                                           (into (reduce disj known forget)
                                                                                 (passed-in to-run result))
                                                                           failed))))
-                         (swap! (.-cell d) #(memo data (reduce disj (passes type data %) (concat failed forget))))))))
+                         (swap! cell #(memo data (reduce disj (passes type data %) (concat failed forget))))))))
         ;; [[remember!]] for a type with masks, with nothing more to forget: `km` the mask of
         ;; the checks known to pass, `tm` of those run
         remember-m! (fn [^Draft d m0 km tm result]
@@ -936,15 +1004,21 @@
                                c [closed (mask-of hot closed)]]
                            (when (< (.size closures) 1000) (.putIfAbsent closures picked c))
                            c)))
-        ;; `groups`, each `[picked xs is]`: the checks a selection picks in a type, a vector of
-        ;; values, and the indices in `xs` of the drafts of the type, ascending. This type's
-        ;; group comes first; each other type's gate takes its own. Each draft is read once,
-        ;; and runs where it has anything to run.
+        ;; the checks of `picked` that read a source
+        fetching-in (fn [picked] (filter #(:fetches? ((:by-id type) %)) picked))
+        ;; `groups`, each `[picked xs is kind]`: the checks a selection picks in a type, a vector
+        ;; of values, the indices in `xs` of the drafts of the type, or of its values where it is
+        ;; unsealed, ascending, and the kind of run: nil for check's, `:recheck` for recheck's,
+        ;; `:seal` for seal's (check's, with the floor of each value). This type's group comes
+        ;; first; each other type's gate takes its own. Each draft or value is read once, and
+        ;; runs where it has anything to run.
         check-group (fn [groups entries]
-                      (let [[[picked xs is] & more] groups
+                      (let [[[picked xs is kind] & more] groups
                             [closed closed-m] (closure-of picked)
+                            named (when (= kind :recheck) (set/intersection ids (set picked)))
+                            forget (when named (fetching-in named))
                             entries (into entries
-                                          (if masks?
+                                          (if (and masks? (nil? kind) (not unsealed?))
                                             (let [closed-m (long closed-m)]
                                               (keep (fn [i]
                                                       (let [d (xs i)
@@ -959,22 +1033,25 @@
                                                            :job [engine data (set-of hot (bit-and-not (long all-mask) tm))]
                                                            :done #(remember-m! d m0 km tm %)})))))
                                             (keep (fn [i]
-                                                    (let [d (xs i)
-                                                          [data known m0] (own-draft d)
-                                                          to-run (minus closed known)]
+                                                    (let [[data known m0 cell] (own-subject (xs i))
+                                                          to-run (case kind
+                                                                   nil      (minus closed known)
+                                                                   :recheck (into named (minus closed known))
+                                                                   :seal    (minus (select/closure type (into closed (select/floor type data)))
+                                                                                   known))]
                                                       (when (seq to-run)
                                                         {:i i
                                                          :type type
                                                          :to-run to-run
                                                          :job [engine data (set/difference ids to-run)]
-                                                         :done #(remember! d m0 known to-run %)})))))
+                                                         :done #(remember! cell data m0 known to-run % forget)})))))
                                           is)]
                         (if-let [[[_ xs [i]]] (seq more)]
                           ((gate (type-of! (xs i))) ::check-all (vec more) entries)
                           (run-jobs (:run-all type) (in-group-order entries)))))
-        run-draft (fn [d to-run [data known m0] forget]
+        run-draft (fn [to-run [data known m0 cell] forget]
                     (let [result (run type data (set/difference ids to-run))]
-                      (remember! d m0 known to-run result forget)
+                      (remember! cell data m0 known to-run result forget)
                       result))
         ;; each key whose readers read no source, to its guard: an assoc of the key runs those
         ;; readers on the old value with the key set, and throws what the change would throw
@@ -1056,66 +1133,106 @@
                   (if (empty? changed)
                     old
                     (do (change-guard old (into {} (map (fn [k] [k (get entries k removed)])) changed))
-                        (proof/seal h (with-meta-of entries old))))))]
-    (proof/install-write!
-     h
-     (fn
-       ([old entries] (write old entries))
-       ;; the change guard takes every change of one key, so this arity is never called
-       ([old entries _ _] (write old entries))
-       ([op x y]
-        (case op
-          ::make (let [data (proof/plain-map x)]
-                   (when-not (.deref ^clojure.lang.Volatile current)
-                     (throw (displaced-constructor (:name type) y)))
-                   (when-not (all-declared? declared? data) (refuse-undeclared! type (keys data)))
-                   (seal! data (run* data #{}) true))
-          ::open (Draft. {} (atom nothing) nil)
-          ::draft-of (if (instance? vc x)
-                       (Draft. (proof/plain-map x) (atom (Memo. type x ids #{} x all-mask)) (meta x))
-                       (throw (ex-info (str "not a value of " (:name type)) {:error :recognitum/not-a-value})))
-          ::rewrite (let [[data] (own-draft x)
-                          y (proof/plain-map y)
-                          changed (changed-keys data y)]
-                      (if (empty? changed)
-                        x
-                        (rewritten x y #(into % changed))))
-          ::clean (let [[data] (own-draft x)
-                        kept (select-keys data (:keys type))]
-                    (if (= (count kept) (count data))
-                      x
-                      (rewritten x kept #(into % (remove (:keys type)) (keys data)))))
-          ::seal (let [[data known m0 all-pass? run-left] (own-for-seal x)]
-                   (when-not (.deref ^clojure.lang.Volatile current)
-                     (throw (displaced-draft (:name type))))
-                   (when-not (all-declared? declared? data) (refuse-undeclared! type (keys data)))
-                   ;; a draft that passes every check runs none
-                   (let [result (when-not all-pass? (run-left data))
-                         rep (when-not (or all-pass? (clean? result)) (report type result))]
-                     (if (or rep (lacks? data))
-                       (do (remember! x m0 known (minus ids known) result)
-                           (when rep (throw (check-failed type rep)))
-                           (refuse-missing! type data))
-                       ;; every check passes: the value sealed is the draft's proof. Where
-                       ;; another run has written since, there is nothing failed to forget.
-                       (let [v (proof/seal h (with-meta-of data x))]
-                         (when-not all-pass?
-                           (compare-and-set! (.-cell ^Draft x) m0 (Memo. type v ids #{} v all-mask)))
-                         v))))
-          ::check (let [[_ known :as own] (own-draft x)
-                        named (set/intersection ids (set y))]
-                    (run-draft x (minus (select/closure type named) known) own ()))
-          ::check-all (check-group x y)
-          ::type type
-          ::current? @current
-          ::displace (do (vreset! current false) nil)
-          ::recheck (let [[_ known :as own] (own-draft x)
-                          named (set/intersection ids (set y))]
-                      ;; a named check that reads a source is forgotten, then remembered only if this run passes it
-                      (run-draft x (into named (set/difference (select/closure type named) known)) own
-                                 (filter #(:fetches? ((:by-id type) %)) named))))))
-     (fn [k] (get guards k))
-     change-guard)
+                        (proof/seal h (with-meta-of entries old))))))
+        ;; the seal of `v`, a value of this unsealed type, against the checks `picked`: runs them,
+        ;; what they wait on and the floor, less what `v` passes, and returns `v` or throws
+        seal-value (fn [v picked]
+                     (let [[data known m0 cell] (own-subject v)
+                           to-run (minus (select/closure type (into (set/intersection ids (set picked))
+                                                                    (select/floor type data)))
+                                         known)
+                           result (when (seq to-run) (run type data (set/difference ids to-run)))]
+                       (when result (remember! cell data m0 known to-run result))
+                       (when-not (or (nil? result) (clean? result))
+                         (throw (check-failed type (report type result))))
+                       (refuse-missing! type data)
+                       v))
+        ;; the installed write. Its three-argument arity, which the class's channel reaches, serves
+        ;; both kinds of type; an unsealed type's strategy calls no other arity.
+        write-all (fn
+                    ([old entries] (write old entries))
+                    ;; the change guard takes every change of one key, so this arity is never called
+                    ([old entries _ _] (write old entries))
+                    ([op x y]
+                     (case op
+                       ::make (let [data (proof/plain-map x)]
+                                (when-not (.deref ^clojure.lang.Volatile current)
+                                  (throw (displaced-constructor (:name type) y)))
+                                (when-not (all-declared? declared? data) (refuse-undeclared! type (keys data)))
+                                (if unsealed?
+                                  (proof/build h data (atom nothing))
+                                  (seal! data (run* data #{}) true)))
+                       ::open (if unsealed?
+                                (throw (no-drafts (:name type)))
+                                (Draft. {} (atom nothing) nil))
+                       ::draft-of (cond unsealed? (throw (no-drafts (:name type)))
+                                        (instance? vc x) (Draft. (proof/plain-map x) (atom (Memo. type x ids #{} x all-mask)) (meta x))
+                                        :else (throw (ex-info (str "not a value of " (:name type)) {:error :recognitum/not-a-value})))
+                       ::rewrite (let [[data] (own-draft x)
+                                       y (proof/plain-map y)
+                                       changed (changed-keys data y)]
+                                   (if (empty? changed)
+                                     x
+                                     (rewritten x y #(into % changed))))
+                       ::clean (let [_ (when unsealed? (throw (no-drafts (:name type))))
+                                     [data] (own-draft x)
+                                     kept (select-keys data (:keys type))]
+                                 (if (= (count kept) (count data))
+                                   x
+                                   (rewritten x kept #(into % (remove (:keys type)) (keys data)))))
+                       ::seal (if unsealed?
+                                (seal-value x y)
+                                (let [[data known m0 all-pass? run-left] (own-for-seal x)]
+                                  (when-not (.deref ^clojure.lang.Volatile current)
+                                    (throw (displaced-draft (:name type))))
+                                  (when-not (all-declared? declared? data) (refuse-undeclared! type (keys data)))
+                           ;; a draft that passes every check runs none
+                                  (let [result (when-not all-pass? (run-left data))
+                                        rep (when-not (or all-pass? (clean? result)) (report type result))]
+                                    (if (or rep (lacks? data))
+                                      (do (remember! (.-cell ^Draft x) data m0 known (minus ids known) result)
+                                          (when rep (throw (check-failed type rep)))
+                                          (refuse-missing! type data))
+                               ;; every check passes: the value sealed is the draft's proof. Where
+                               ;; another run has written since, there is nothing failed to forget.
+                                      (let [v (proof/seal h (with-meta-of data x))]
+                                        (when-not all-pass?
+                                          (compare-and-set! (.-cell ^Draft x) m0 (Memo. type v ids #{} v all-mask)))
+                                        v)))))
+                       ::check (let [[_ known :as own] (own-subject x)
+                                     named (set/intersection ids (set y))]
+                                 (run-draft (minus (select/closure type named) known) own ()))
+                       ::check-all (check-group x y)
+                       ::type type
+                       ::current? @current
+                ;; whether `x` is a value sealed under this definition, which is current
+                       ::sealed? (and (.deref ^clojure.lang.Volatile current) (proof/proven? h x))
+                       ::displace (do (vreset! current false) nil)
+                       ::recheck (let [[_ known :as own] (own-subject x)
+                                       named (set/intersection ids (set y))]
+                            ;; a named check that reads a source is forgotten, then remembered only if this run passes it
+                                   (run-draft (into named (set/difference (select/closure type named) known)) own
+                                              (fetching-in named))))))]
+    (if unsealed?
+      ;; each change of a value carries its memory: the new value remembers what the old one
+      ;; remembered, and the keys the change writes
+      (proof/install-carry!
+       h
+       write-all
+       (fn [old changes]
+         (let [cell (own-value old)]
+           (refuse-undeclared! type (keys changes))
+           (let [mo @cell]
+             (atom (if (and (instance? Memo mo) (some? (.-proof ^Memo mo)))
+                     (let [^Memo mo mo]
+                       (Memo. (.-type mo) (.-base mo) (.-passes mo) (into (.-written mo) (keys changes))
+                              (.-proof mo) (.-mask mo)))
+                     mo))))))
+      (proof/install-write!
+       h
+       write-all
+       (fn [k] (get guards k))
+       change-guard))
     (vreset! (::gate type) (proof/installed strategy vc))
     (when displaced
       ((gate displaced) ::displace nil nil))
@@ -1139,41 +1256,86 @@
   ([type m remedy] ((gate type) ::make m remedy)))
 
 (defn sealed?
-  "Whether `x` is a sealed value of the current definition of its type."
+  "Whether `x` is a sealed value of the current definition of its type: as the type's proof
+  strategy answers, so never a value of an unsealed type."
   [x]
   (let [t (type-of x)]
-    (boolean (and t (not (draft? x)) (not (class? x)) (current? t)))))
+    (boolean (and t (not (draft? x)) (not (class? x)) ((gate t) ::sealed? x nil)))))
+
+(defn unsealed?
+  "Whether `type` was defined unsealed: its values are made without checks and carry what
+  passed."
+  [type]
+  (true? (::unsealed type)))
+
+(defn- held-memory
+  "What `v`, a value of the unsealed `type`, remembers, or nil where `type` is displaced or
+  `v` holds no memory."
+  [type v]
+  (when (current? type)
+    (some-> (proof/memory (:strategy type) v) deref)))
 
 (defn draft
   "A draft: of a type (given its class), holding nothing and passing nothing; of a sealed
   value, holding its entries and passing every check; of a value of a displaced definition, a
-  draft of the type's current definition holding its entries and passing nothing; of a draft,
-  that draft itself, sharing what it remembers."
+  draft of the type's current definition holding its entries and passing nothing, or, where
+  the type's name no longer names a current definition of the type, a refusal saying the type
+  has no current definition; of a draft, that draft itself, sharing what it remembers. An
+  unsealed type has no drafts: refuses its class and its values."
   [x]
   (cond (draft? x) x
         (class? x) ((gate (type-of! x)) ::open nil nil)
-        :else      (let [t (type-of! x)]
-                     (if-let [now (when-not (current? t)
-                                    (let [n (named-now (:name t))] (when (and n (current? n)) n)))]
-                       (with-meta ((gate now) ::rewrite ((gate now) ::open nil nil) (proof/plain-map x)) (meta x))
-                       ((gate t) ::draft-of x nil)))))
+        :else      (let [t (value-type! x)]
+                     ;; a current unsealed type's gate refuses ::draft-of itself
+                     (if (current? t)
+                       ((gate t) ::draft-of x nil)
+                       (let [_   (when (unsealed? t) (throw (no-drafts (:name t))))
+                             now (named-now (:name t))]
+                         (when-not (and now (current? now)) (throw (no-definition (:name t) x)))
+                         (with-meta ((gate now) ::rewrite ((gate now) ::open nil nil) (proof/plain-map x))
+                           (meta x)))))))
 
 (defn clean
   "`d` without the keys its type does not declare, remembering what `d` remembers."
   [d]
-  ((gate (type-of! d)) ::clean d nil))
+  ((gate (value-type! d)) ::clean d nil))
+
+(defn- not-sealable [d]
+  (ex-info (str "not a draft, a sealed value or a value of an unsealed type: " (pr-str d))
+           {:error :recognitum/not-a-draft :value d}))
 
 (defn seal
   "The sealed value of draft `d`, after every check it does not remember as passing passes.
   Refuses a draft holding an undeclared key before any check runs. Otherwise `d` remembers
   each check that passed and forgets each that failed, whether or not the seal succeeds.
   Throws as [[make]] does; a draft of a displaced definition's class is refused before any
-  check runs. A sealed value is returned as it is."
-  [d]
-  (cond (draft? d)  ((gate (type-of! d)) ::seal d nil)
-        (sealed? d) d
-        :else (throw (ex-info (str "not a draft or a sealed value: " (pr-str d))
-                              {:error :recognitum/not-a-draft :value d}))))
+  check runs. A sealed value is returned as it is.
+
+  With `sel`, a draft seals against every check: `sel` is [[recognitum.select/every]], or the
+  seal throws, running nothing. A value of an unsealed type runs the checks `sel` selects,
+  what they wait on and the shape checks of the fields it must or does hold, less what it
+  passes; it remembers what passed and forgets what failed, and is returned itself, or the
+  seal throws as [[make]] does. Without `sel`, it is sealed against every check."
+  ([d]
+   (cond (draft? d)  ((gate (type-of! d)) ::seal d nil)
+         (sealed? d) d
+         :else (let [t (type-of d)]
+                 (some->> t (refuse-type! d))
+                 (if (and t (unsealed? t))
+                   ((gate t) ::seal d (:ids t))
+                   (throw (not-sealable d))))))
+  ([d sel]
+   (cond (draft? d)  (if (= select/every sel)
+                       (seal d)
+                       (throw (ex-info (str "a draft seals against every check, so seal takes no selection"
+                                            " but rec/every for one: " (pr-str sel))
+                                       {:error :recognitum/draft-selection :selection sel})))
+         (sealed? d) d
+         :else (let [t (type-of d)]
+                 (some->> t (refuse-type! d))
+                 (if (and t (unsealed? t))
+                   ((gate t) ::seal d (select/select t sel))
+                   (throw (not-sealable d)))))))
 
 (defn- passes-of
   "The checks `x` passes, as far as anything shows: every check for a sealed value, what a draft
@@ -1181,6 +1343,7 @@
   [type x]
   (cond (draft? x) (passes type (.-data ^Draft x) (marks-of x))
         (sealed? x) (:ids type)
+        (unsealed? type) (passes type x (held-memory type x))
         :else #{}))
 
 (defn- data-of [x] (if (draft? x) (.-data ^Draft x) x))
@@ -1194,9 +1357,9 @@
   `{:failed {id {:data :doc :blocked}} :blocked #{id}}` with `:pulled-back` where an `except`
   removed a check that a wait then ran."
   [x sel]
-  (let [type (type-of! x)
+  (let [type (value-type! x)
         picked (select/select type sel)]
-    (if (draft? x)
+    (if (or (draft? x) (unsealed? type))
       (let [known (passes-of type x)
             to-run (set/difference (select/closure type picked) known)]
         (answer type ((gate type) ::check x picked) sel picked to-run))
@@ -1207,51 +1370,55 @@
   `x` does not pass. A draft remembers as [[check]] does; a sealed value is left as it is.
   Returns as [[check]] does."
   [x sel]
-  (let [type (type-of! x)
+  (let [type (value-type! x)
         picked (select/select type sel)
         known (passes-of type x)
         to-run (into picked (set/difference (select/closure type picked) known))]
     (answer type
-            (if (draft? x)
+            (if (or (draft? x) (unsealed? type))
               ((gate type) ::recheck x picked)
               (run type x (set/difference (:ids type) to-run)))
             sel picked to-run)))
 
-(defn check-all
-  "Runs, over every value in `xs`, the checks `sel` names in it and those they wait on that it
-  does not pass already, in one run of the engine, so values that read the same source, of one
-  type or several, share its calls. Each draft remembers what passed and forgets what failed,
-  as under [[check]]. Returns a vector with one answer per value, each true or a report as
-  [[check]] returns."
-  [xs sel]
+(defn- run-batch
+  "Runs, over every value in `xs`, what `plan` says for its type in one run of the engine, so
+  values that read the same source, of one type or several, share its calls. `(plan type)` is
+  `[sel kind]`: the selection, and the kind of run, nil for [[check]]'s, `:recheck` for
+  [[recheck]]'s, or `:seal` for a seal's, which adds the floor of each value. Drafts and values
+  of unsealed types remember as the single op would. Returns a vector with one answer per value,
+  each true or a report as [[check]] returns."
+  [xs plan]
   (let [xs (vec xs)
         n (count xs)
-        ;; each type, to what `sel` picks in it and the closure of that: the same for every
-        ;; value of the type in one call
+        ;; each type, to what its selection picks in it, the closure of that, its mask, the
+        ;; selection and the kind of run: the same for every value of the type in one call
         per-type (java.util.IdentityHashMap.)
         types (mapv (fn [x]
-                      (let [type (type-of! x)]
+                      (let [type (value-type! x)]
                         (when-not (.containsKey per-type type)
-                          (let [picked (select/select type sel)
+                          (let [[sel kind] (plan type)
+                                picked (select/select type sel)
                                 closed (select/closure type picked)]
-                            (.put per-type type [picked closed (mask-of (::hot type) closed)])))
+                            (.put per-type type [picked closed (mask-of (::hot type) closed) sel kind])))
                         type))
                     xs)
-        ;; the drafts of each type, by index; a draft runs in its type's gate, which reads its
-        ;; memory and runs what it finds
+        ;; the drafts, and values of unsealed types, of each type, by index; each runs in its
+        ;; type's gate, which reads its memory and runs what it finds
         drafts (java.util.IdentityHashMap.)
         order (java.util.ArrayList.)
-        ;; each value that is not a draft and has anything to run, run here
+        ;; each sealed value that has anything to run, run here
         others (loop [i 0, others (transient [])]
                  (if (== i n)
                    (persistent! others)
                    (let [x (xs i)
-                         type (types i)]
-                     (if (draft? x)
+                         type (types i)
+                         pt (.get per-type type)]
+                     (if (or (draft? x) (unsealed? type))
                        ;; through the mask, where the type has one, a draft that passes every
-                       ;; check in the closure has nothing to run
-                       (if (let [m ((.get per-type type) 2)]
-                             (and m (zero? (bit-and-not (long m) (passes-mask type (.-data ^Draft x) (marks-of x))))))
+                       ;; check in the closure has nothing to run for check
+                       (if (let [m (nth pt 2)]
+                             (and m (nil? (nth pt 4)) (draft? x)
+                                  (zero? (bit-and-not (long m) (passes-mask type (.-data ^Draft x) (marks-of x))))))
                          (recur (inc i) others)
                          (let [^java.util.ArrayList is (or (.get drafts type)
                                                            (let [is (java.util.ArrayList.)]
@@ -1260,32 +1427,59 @@
                                                              is))]
                            (.add is i)
                            (recur (inc i) others)))
-                       (let [to-run (minus ((.get per-type type) 1) (passes-of type x))]
+                       (let [known (passes-of type x)
+                             to-run (if (= :recheck (nth pt 4))
+                                      (into (nth pt 0) (minus (nth pt 1) known))
+                                      (minus (nth pt 1) known))]
                          (recur (inc i)
                                 (if (seq to-run)
                                   (conj! others {:i i :to-run to-run
                                                  :job [(:engine type) x (set/difference (:ids type) to-run)]
                                                  :done (fn [_])})
                                   others)))))))
-        groups (mapv (fn [type] [((.get per-type type) 0) xs (vec (.get drafts type))]) order)
+        groups (mapv (fn [type] (let [[picked _ _ _ kind] (.get per-type type)]
+                                  [picked xs (vec (.get drafts type)) kind]))
+                     order)
         ran (cond
               (seq groups) ((gate (first order)) ::check-all groups others)
               (seq others) (run-jobs (:run-all (types (:i (first others)))) others)
               :else [])
         out (object-array n)]
     (doseq [[i r to-run] ran]
-      (let [type (types i)]
-        (aset out i (answer type r sel ((.get per-type type) 0) to-run))))
+      (let [type (types i)
+            pt (.get per-type type)]
+        (aset out i (answer type r (nth pt 3) (nth pt 0) to-run))))
     (mapv #(if (nil? %) true %) out)))
+
+(defn check-all
+  "Runs, over every value in `xs`, the checks `sel` names in it and those they wait on that it
+  does not pass already, in one run of the engine, so values that read the same source, of one
+  type or several, share its calls. Each draft, and each value of an unsealed type, remembers
+  what passed and forgets what failed, as under [[check]]. Returns a vector with one answer
+  per value, each true or a report as [[check]] returns."
+  [xs sel]
+  (let [p [sel nil]]
+    (run-batch xs (fn [_] p))))
+
+(defn recheck-all
+  "Runs, over every value in `xs`, what [[recheck]] would run on it, in one run of the engine.
+  Each draft, and each value of an unsealed type, remembers as under [[recheck]]; a sealed
+  value is left as it is. Returns as [[check-all]] does."
+  [xs sel]
+  (let [p [sel :recheck]]
+    (run-batch xs (fn [_] p))))
 
 (defn proves?
   "Whether `x` passes every check `sel` names in it, every check those wait on, and the shape
   check of each field it must or does hold. Always true for a sealed value of a type's current
-  definition; for a draft, a matter of what it remembers; false for anything else."
+  definition; for a draft of a type's current definition, or a value of an unsealed type's
+  current definition, a matter of what it remembers; false for anything else, a draft made
+  before its type was defined again included, and a type, its class or the type itself."
   [x sel]
   (if-let [type (when-not (class? x) (type-of x))]
     (or (sealed? x)
-        (and (draft? x)
+        (and (or (draft? x) (and (unsealed? type) (instance? (::class type) x)))
+             (current? type)
              (set/subset? (select/closure type (into (select/select type sel)
                                                      (select/floor type (data-of x))))
                           (passes-of type x))))
@@ -1293,14 +1487,14 @@
 
 (defn proven-checks
   "The ids of the checks `x` passes: every check of its type for a sealed value, those a draft
-  remembers."
+  or a value of an unsealed type remembers."
   [x]
-  (passes-of (type-of! x) x))
+  (passes-of (value-type! x) x))
 
 (defn proven-concerns
   "The ids of the concerns whose checks `x` passes, as [[proves?]] answers for each."
   [x]
-  (let [type (type-of! x)]
+  (let [type (value-type! x)]
     (set (for [t (distinct (mapcat :concerns (:checks type)))
                :when (proves? x t)]
            t))))
@@ -1313,44 +1507,68 @@
 ;;; ------------------------------------------------------------------ many values at once
 
 (defn- value?
-  "Whether `x` is a value of a type, of any definition: the walk does not enter it."
+  "Whether `x` is a value of a type, of any definition, sealed or not: the walk does not enter
+  a sealed one. Not a proof: [[sealed?]] and [[proves?]] answer that."
   [x]
   (instance? recognitum.proof.Proven x))
 
-(defn- scan!
-  "Adds to `found`, inner drafts first, each draft the walk reaches in `x`, as
-  `[at draft height fields]`: `at` its path, last step first, and `fields` the keys of its
-  fields that hold a draft. `at` is the path to `x`; a draft in key position ends its path
-  with `key-step`. Returns the height of `x`: -1 where it holds no draft, else one more than
-  the highest draft it holds, or that draft's for a container."
-  ^long [x at key-step ^java.util.ArrayList found]
-  ;; `in` scans `y` at the path `at` with `step` added, building that path only for a collection
-  (let [in (fn ^long [y step at] (if (coll? y) (scan! y (cons step at) key-step found) -1))]
-    (cond (not (coll? x)) -1
-          (draft? x) (let [fields (java.util.ArrayList.)
-                           h (inc (long (reduce-kv (fn [h k v]
-                                                     (let [hv (in v k at)]
-                                                       (when (>= hv 0) (.add fields k))
-                                                       (max (long h) hv)))
-                                                   -1 (.-data ^Draft x))))]
-                       (.add found [at x h (vec fields)])
-                       h)
-          (value? x) -1
-          (map-entry? x) (max (in (key x) 0 at) (in (val x) 1 at))
-          (map? x) (reduce-kv (fn [h k v] (max (long h) (in k key-step (cons k at)) (in v k at)))
-                              -1 x)
-          (set? x) (reduce (fn [h e] (max (long h) (in e e at))) -1 x)
-          (or (vector? x) (seq? x)) (loop [s (seq x), i 0, h -1]
-                                      (if s
-                                        (recur (next s) (inc i) (max h (in (first s) i at)))
-                                        h))
-          :else -1)))
+(defn- unsealed-value?
+  "Whether `x` is a value of an unsealed type, as its class says: the walk of [[seal-all]]
+  enters it as it enters a draft."
+  [x]
+  (instance? recognitum.proof.Built x))
+
+;; What [[scan!]] answers of a part of a shape: -1 where it holds no draft and no value the walk
+;; enters; else its height, shifted left one bit, with the low bit set where a draft is reached in
+;; it. A draft's or an entered value's height is one more than the highest it holds, or 0.
+
+(defn- reach
+  "Two answers of [[scan!]] combined: the greater height, and a draft where either reaches one."
+  ^long [^long a ^long b]
+  (cond (neg? a) b
+        (neg? b) a
+        :else (bit-or (max (bit-and a -2) (bit-and b -2)) (bit-and (bit-or a b) 1))))
+
+(defn- scanner
+  "A function `(scan x at)` that adds to `found`, inner nodes first, each draft the walk
+  reaches in `x`, and each value of an unsealed type where `enter?`, as `[at node height
+  fields]`: `at` its path, last step first, and `fields` the keys of its fields in which a draft
+  is reached. `at` is the path to `x`; a node in key position ends its path with `key-step`.
+  The function returns what `x` reaches, as above."
+  [key-step enter? ^java.util.ArrayList found]
+  (letfn [(scan ^long [x at]
+            ;; `in` scans `y` at the path `at` with `step` added, building that path only for a
+            ;; collection
+            (let [in (fn ^long [y step at] (if (coll? y) (scan y (cons step at)) -1))
+                  node (fn ^long [x draft?]
+                         (let [fields (java.util.ArrayList.)
+                               r (long (reduce-kv (fn [r k v]
+                                                    (let [rv (in v k at)]
+                                                      (when (and (pos? rv) (== 1 (bit-and rv 1))) (.add fields k))
+                                                      (reach r rv)))
+                                                  -1 (if draft? (.-data ^Draft x) x)))
+                               h (if (neg? r) 0 (inc (bit-shift-right r 1)))]
+                           (.add found [at x h (vec fields)])
+                           (bit-or (bit-shift-left h 1) (if draft? 1 (if (neg? r) 0 (bit-and r 1))))))]
+              (cond (not (coll? x)) -1
+                    (draft? x) (node x true)
+                    (value? x) (if (and enter? (unsealed-value? x)) (node x false) -1)
+                    (map-entry? x) (reach (in (key x) 0 at) (in (val x) 1 at))
+                    (map? x) (reduce-kv (fn [r k v] (reach (reach r (in k key-step (cons k at))) (in v k at)))
+                                        -1 x)
+                    (set? x) (reduce (fn [r e] (reach r (in e e at))) -1 x)
+                    (or (vector? x) (seq? x)) (loop [s (seq x), i 0, r -1]
+                                                (if s
+                                                  (recur (next s) (inc i) (reach r (in (first s) i at)))
+                                                  r))
+                    :else -1)))]
+    scan))
 
 (defn- rebuild
   "`x` as the walk makes it: maps rebuilt as `clojure.walk` rebuilds them, keys and values;
-  vectors, lists and sets by element; a list a list, any other sequence a vector; anything
-  else as it is. Each draft and each value of a type it reaches is replaced by `(f it)`, and
-  not entered."
+  vectors, lists and sets by element; a list a list, any other sequence a vector, each with its
+  metadata; anything else as it is. Each draft and each value of a type it reaches is replaced
+  by `(f it)`, and not entered."
   [x f]
   (let [go #(rebuild % f)]
     (cond (not (coll? x)) x
@@ -1359,8 +1577,8 @@
           (instance? clojure.lang.IRecord x) (reduce (fn [r [k v]] (conj r [(go k) (go v)])) x x)
           (map? x) (into (empty x) (map (fn [[k v]] [(go k) (go v)])) x)
           (vector? x) (into (empty x) (map go) x)
-          (list? x) (apply list (map go x))
-          (seq? x) (into [] (map go) x)
+          (list? x) (with-meta-of (apply list (map go x)) x)
+          (seq? x) (with-meta-of (into [] (map go) x) x)
           (set? x) (into (empty x) (map go) x)
           :else x)))
 
@@ -1370,16 +1588,18 @@
     :recognitum/displaced-constructor :recognitum/not-a-type :recognitum/not-a-draft})
 
 (defn- seal-or-refusal
-  "`[value nil]`, the seal of draft `d`, or `[nil ex-data]` where [[seal]] refuses it."
-  [d]
-  (try [(seal d) nil]
+  "`[value nil]`, the seal of draft `d`, or of a value of an unsealed type against `sel`, or
+  `[nil ex-data]` where [[seal]] refuses it."
+  [d sel]
+  (try [(if (draft? d) (seal d) (seal d sel)) nil]
        (catch clojure.lang.ExceptionInfo e
          (if (contains? seal-refusals (:error (ex-data e))) [nil (ex-data e)] (throw e)))))
 
 (defn- seal-level
-  "Seals the drafts `ds`, each as [[seal]] would, with one run of the engine for those that
+  "Seals the drafts, and values of unsealed types, `ds`, each as [[seal]] would, the drafts
+  against every check and the values against `sel`, with one run of the engine for those that
   have checks to run. Returns `[value nil]` or `[nil ex-data]` for each, in order."
-  [ds]
+  [ds sel]
   (let [;; each type, to a predicate of its declared keys, or false where it is not current:
         ;; asked once per type
         per-type (java.util.IdentityHashMap.)
@@ -1387,41 +1607,53 @@
                              (if (nil? c)
                                (let [c (and (current? t) (member-of (:keys t)))] (.put per-type t c) c)
                                c)))
-        ;; whether seal refuses the draft before any check runs: a draft of no type or of a
-        ;; displaced definition, or one holding a key its type does not declare
+        ;; whether seal refuses `d` before any check runs: a draft of no type or of a displaced
+        ;; definition, or one holding a key its type does not declare; a value of a displaced
+        ;; definition. A value of an unsealed type holds no undeclared key.
         refused (mapv (fn [d] (let [t (type-of d)
                                     declared? (when t (declared?* t))]
-                                (not (and declared? (all-declared? declared? (.-data ^Draft d))))))
+                                (if (draft? d)
+                                  (not (and declared? (all-declared? declared? (.-data ^Draft d))))
+                                  (not declared?))))
                       ds)
-        answers (check-all (if (some true? refused)
+        every-plan [select/every nil]
+        value-plan [sel :seal]
+        answers (run-batch (if (some true? refused)
                              (vec (keep-indexed (fn [i d] (when-not (refused i) d)) ds))
                              ds)
-                           select/every)]
+                           (fn [t] (if (unsealed? t) value-plan every-plan)))]
     (loop [i 0, j 0, out (transient [])]
       (if (== i (count ds))
         (persistent! out)
         (let [d (ds i)]
           (if (refused i)
-            (recur (inc i) j (conj! out (seal-or-refusal d)))
+            (recur (inc i) j (conj! out (if (draft? d)
+                                          (seal-or-refusal d sel)
+                                          [nil (ex-data (displaced-unsealed (:name (type-of d)) d))])))
             (let [a (answers j)]
               (recur (inc i) (inc j)
-                     (conj! out (if (true? a) (seal-or-refusal d) [nil (ex-data (check-failed (type-of d) a))]))))))))))
+                     (conj! out (if (true? a) (seal-or-refusal d sel) [nil (ex-data (check-failed (type-of d) a))]))))))))))
 
-(defn seal-all
-  "Seals every draft that a walk of `shape` reaches, inner drafts first, all or nothing. See
-  `recognitum.core/seal-all`; `key-step` ends the path of a draft in key position."
-  [shape key-step]
+(defn- seal-all*
+  "Seals every draft that a walk of `shape` reaches, inner drafts first, all or nothing; where
+  `enter?`, also enters and seals each value of an unsealed type against `sel`."
+  [shape sel key-step enter?]
   (let [found (java.util.ArrayList.)
-        _ (scan! shape () key-step found)
-        ;; each draft given, to `[checked value fields]`: the draft as checked, holding the
-        ;; walk's value of each field that holds a draft; its sealed value, or nil; and those
-        ;; fields. A draft given at two places is checked at each, alike.
+        _ ((scanner key-step enter? found) shape ())
+        ;; each draft or value entered, to `[checked value fields]`: it as checked, holding the
+        ;; walk's value of each field in which a draft is reached; its sealed value, or nil; and
+        ;; those fields. A node given at two places is checked at each, alike.
         done (java.util.IdentityHashMap.)
-        out (fn [x] (if (draft? x) (let [[checked v] (.get done x)] (or v checked)) x))
+        out (fn [x] (if-let [[checked v] (.get done x)] (or v checked) x))
         failures (java.util.ArrayList.)]
     (doseq [[_ level] (sort-by key (group-by #(nth % 2) found))]
-      (let [ds (mapv (fn [[_ d _ fields]] (reduce (fn [x k] (assoc x k (rebuild (get d k) out))) d fields)) level)
-            sealed (seal-level ds)]
+      (let [;; a value of a displaced definition refuses writes: it is checked, and given back,
+            ;; as it is
+            level (mapv (fn [[at d n fields :as e]]
+                          (if (or (draft? d) (current? (type-of d))) e [at d n []]))
+                        level)
+            ds (mapv (fn [[_ d _ fields]] (reduce (fn [x k] (assoc x k (rebuild (get d k) out))) d fields)) level)
+            sealed (seal-level ds sel)]
         (dotimes [i (count ds)]
           (let [[at d _ fields] (level i)
                 [v failure] (sealed i)]
@@ -1430,25 +1662,36 @@
     (if (.isEmpty failures)
       (rebuild shape out)
       (let [drafts-of (fn drafts-of [x]
-                        (if (draft? x)
-                          (let [[checked _ fields] (.get done x)]
-                            (reduce (fn [y k] (assoc y k (rebuild (get x k) drafts-of))) checked fields))
+                        (if-let [[checked _ fields] (.get done x)]
+                          (reduce (fn [y k] (assoc y k (rebuild (get x k) drafts-of))) checked fields)
                           x))
             failures (into {} failures)]
-        (throw (ex-info (str (count failures) " of " (.size found) " drafts did not seal, at "
+        (throw (ex-info (str (count failures) " of " (.size found) " drafts and values did not seal, at "
                              (str/join ", " (map pr-str (keys failures))))
                         {:error :recognitum/drafts-failed
                          :failures failures
                          :drafts (rebuild shape drafts-of)}))))))
 
+(defn seal-all
+  "Seals every draft that a walk of `shape` reaches, inner drafts first, all or nothing, and
+  every value of an unsealed type, which the walk enters as a draft, against `sel` (every
+  check where none is given). See `recognitum.core/seal-all`; `key-step` ends the path of a
+  draft or value in key position."
+  ([shape key-step] (seal-all* shape select/every key-step true))
+  ([shape sel key-step] (seal-all* shape sel key-step true)))
+
 (defn drafting-all
-  "[[seal-all]] of `f` of `shape` with each value of a type the walk reaches opened as a
-  draft. See `recognitum.core/drafting-all`."
+  "[[seal-all]] of `f` of `shape` with each sealed value the walk reaches opened as a draft.
+  Values of unsealed types are neither opened, nor entered, nor sealed. See
+  `recognitum.core/drafting-all`."
   [shape f key-step]
-  (seal-all (f (rebuild shape draft)) key-step))
+  (seal-all* (f (rebuild shape #(if (unsealed-value? %) % (draft %)))) select/every key-step false))
 
 (defn drafting
   "`f` of draft `v`, unsealed; or of a value `v`, the seal of `f` of its draft. See
   `recognitum.core/drafting`."
   [v f]
-  (if (draft? v) (f v) (seal (f (draft v)))))
+  (if (draft? v)
+    (f v)
+    (do (some->> (type-of v) (refuse-type! v))
+        (seal (f (draft v))))))

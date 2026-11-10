@@ -1,10 +1,10 @@
-(ns recognitum.heist
+(ns demo.heist
   "The worked example: a heist, its crew, the take and how it is split, and what the house
   has on file about the people taking it."
   (:require
    [clojure.string :as str]
    [recognitum.core :as rec]
-   [recognitum.house :as house]))
+   [demo.house :as house]))
 
 (defn non-blank? [s] (and (string? s) (not (str/blank? s))))
 (defn crew-set? [x] (and (set? x) (seq x) (every? string? x)))

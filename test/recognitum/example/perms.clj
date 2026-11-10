@@ -11,10 +11,9 @@
     "the collection is on file"
     (some? (rec/fetch db/collections collection-id)))
 
-  ^::permission
-  (may-write [collection-exists]
-             "the acting user may write to the collection"
-             (db/can-write? user (rec/fetch db/collections collection-id))))
+  (may-write [collection-exists] ::permission
+    "the acting user may write to the collection"
+    (db/can-write? user (rec/fetch db/collections collection-id))))
 
 (rec/defcopy current-collection-write collection-write
   {collection-exists current-collection-exists

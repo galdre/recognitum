@@ -1,5 +1,5 @@
 (ns recognitum.define
-  "What `defproven`, `defchecks`, `defcopy` and `defconcern` expand to: each parses its form,
+  "What `defproven`, `defproven-in`, `defchecks`, `defcopy` and `defconcern` expand to: each parses its form,
   refuses the mistakes it can see, and emits a call of the record layer or a `def`.
 
   Nothing here is part of the public API."
@@ -35,27 +35,78 @@
 
 ;;; ------------------------------------------------------------------ clauses
 
-(def ^:private plain-meta #{:line :column :end-line :end-column :file :source :override})
+(def ^:private reader-meta #{:line :column :end-line :end-column :file :source})
+
+(defn- show-flag
+  "Keyword `k` as written in this namespace: `::name` where it is of this namespace."
+  [k]
+  (if (= (namespace k) (str *ns*)) (str "::" (name k)) (str k)))
+
+(defn- show-flags
+  "The flags `x`, a keyword or a set, as written in this namespace."
+  [x]
+  (if (keyword? x) (show-flag x) (str "#{" (str/join " " (map #(if (keyword? %) (show-flag %) (pr-str %)) x)) "}")))
+
+(def ^:private input-remedy
+  "an input clause takes no concern or :override; they go after a check's waits")
+
+(defn- refuse-meta!
+  "Refuses metadata written on `x`, the `place` named in the message: a clause, its name or its
+  waits, or a section's head. The macros read none there; a clause's concerns and `:override`
+  follow its waits. `nm` names the clause in the remedy; with `:input-of` in `ctx`, the clause
+  binds an input of that bundle."
+  [ctx place x nm]
+  (when-let [m (not-empty (apply dissoc (meta x) reader-meta))]
+    (let [shown (str/join " " (for [[k v] m]
+                                (if (and (true? v) (keyword? k)) (str "^" (show-flag k)) (str "^" (pr-str {k v})))))
+          k (some #(when (or (qualified-keyword? %) (= :override %)) %) (keys m))]
+      (fail! ctx (str shown " on " place ": "
+                      (if (:input-of ctx)
+                        input-remedy
+                        (str "a clause takes no metadata; its concerns and :override go after its waits, as in ("
+                             nm " [waits] " (if k (show-flag k) "::concern") " body)")))))))
+
+(defn- flag-form? [x] (or (keyword? x) (set? x)))
+
+(defn- clause-flags
+  "The flags `x` written after the waits of clause `nm`, a keyword or a set of keywords, as a set:
+  `:override`, and concerns that [[defconcern]] defined."
+  [ctx nm x]
+  (let [ks (if (set? x) x #{x})]
+    (doseq [k ks]
+      (cond (= :override k) nil
+            (qualified-keyword? k)
+            (when-not (concern-var k)
+              (fail! ctx (str (show-flag k) " on " nm " names no concern that rec/defconcern defines")))
+            (keyword? k)
+            (fail! ctx (str "unknown flag " k " on " nm ": a clause's flags are :override and concerns"))
+            :else
+            (fail! ctx (str "a clause's flags are keywords: " (show-flags x) " on " nm))))
+    ks))
 
 (defn- parse-clause
-  "`(name [waits] \"doc\"? body...)`, with its concerns and `^:override` flag."
+  "`(name [waits] flags? \"doc\"? body...)`, where `flags` is a keyword or a set of them: its
+  concerns and `:override`. A keyword or set alone after the waits is the body. Metadata on the
+  clause, its name or its waits is refused. With `:input-of` in `ctx`, the clause binds an input
+  of that bundle, and takes no flags."
   [ctx clause]
   (let [ctx (assoc ctx :line (:line (meta clause)))]
     (when-not (and (seq? clause) (symbol? (first clause)) (vector? (second clause)))
-      (fail! ctx (str "a clause is (name [waits] \"doc\"? body): " (pr-str clause))))
+      (fail! ctx (str "a clause is (name [waits] flags? \"doc\"? body): " (pr-str clause))))
     (let [[nm waits & more] clause
-          [doc body] (if (and (string? (first more)) (next more)) [(first more) (rest more)] [nil more])
-          concerns (reduce-kv (fn [acc k _]
-                                (cond (plain-meta k) acc
-                                      (qualified-keyword? k)
-                                      (if (concern-var k)
-                                        (conj acc k)
-                                        (fail! ctx (str "^" k " on " nm " names no concern that rec/defconcern defines")))
-                                      :else (fail! ctx (str "unknown flag ^" k " on " nm))))
-                              #{} (or (meta clause) {}))]
+          what (if-let [b (:input-of ctx)] (str "input clause " nm " of " b) nm)
+          _ (refuse-meta! ctx (if (:input-of ctx) what (str "the clause " nm)) clause nm)
+          _ (refuse-meta! ctx (str "the name of " what) nm nm)
+          _ (refuse-meta! ctx (str "the waits of " what) waits nm)
+          written (when (and (flag-form? (first more)) (next more)) (first more))
+          _ (when (and written (:input-of ctx))
+              (fail! ctx (str (show-flags written) " on " what ": " input-remedy)))
+          flags (if written (clause-flags ctx nm written) #{})
+          more (if written (rest more) more)
+          [doc body] (if (and (string? (first more)) (next more)) [(first more) (rest more)] [nil more])]
       (when (empty? body) (fail! ctx (str nm " has no body")))
-      {:name nm :waits waits :doc doc :concerns concerns :line (:line (meta clause))
-       :override? (boolean (:override (meta clause)))
+      {:name nm :waits waits :doc doc :concerns (disj flags :override) :line (:line (meta clause))
+       :override? (contains? flags :override)
        :body (if (next body) (cons 'do body) (first body))})))
 
 (defn- topo-check!
@@ -90,23 +141,35 @@
 
 (defn- input-key [s] (keyword (name s)))
 
+(defn- named
+  "`nm` with the docstring `doc`, or as it is when `doc` is nil."
+  [nm doc]
+  (cond-> nm doc (vary-meta assoc :doc doc)))
+
 (defn- emit-check-vars [bname cs]
   (for [c cs]
-    `(def ~(cond-> (:name c) (:doc c) (vary-meta assoc :doc (:doc c)))
+    `(def ~(named (:name c) (:doc c))
        (check-of ~bname '~(:name c)))))
 
 (defn defchecks
-  "The expansion of `(rec/defchecks bname [inputs] rec/checks clauses...)`. `opts` holds the
-  engine's `:compile-body`, the `:read-macros` [[recognitum.body/analyze]] takes, and
-  `:checks-marker`, the symbol of the var that starts a section of own checks."
-  [env bname inputs marker clauses {:keys [compile-body read-macros checks-marker]}]
+  "The expansion of `(rec/defchecks bname \"doc\"? [inputs] rec/checks clauses...)`, `doc` nil
+  where the form has none. `opts` holds the engine's `:compile-body`, the `:read-macros`
+  [[recognitum.body/analyze]] takes, and `:checks-marker`, the symbol of the var that starts a
+  section of own checks."
+  [env bname doc inputs marker clauses {:keys [compile-body read-macros checks-marker]}]
   (let [ctx {:where (str *ns* "/" bname) :read-macros read-macros}
         _ (when-not (and (simple-symbol? bname) (vector? inputs) (every? simple-symbol? inputs))
-            (fail! ctx "defchecks takes a name, a vector of plain input symbols, rec/checks and clauses"))
+            (fail! ctx (str "defchecks takes a name, a docstring if any, a vector of plain input symbols,"
+                            " rec/checks and clauses")))
         _ (when-not (checks-marker? checks-marker marker)
             (fail! ctx (str "expected rec/checks after the inputs, got " (pr-str marker))))
+        _ (refuse-meta! ctx marker marker "name")
         _ (refuse-duplicates! ctx "inputs" inputs)
         parsed (mapv #(parse-clause ctx %) clauses)
+        _ (when-let [c (first (filter :override? parsed))]
+            (fail! (assoc ctx :line (:line c))
+                   (str ":override on " (:name c) ": a bundle's check replaces no check; :override is for a"
+                        " clause of a type that replaces a check of a bound bundle")))
         names (set (map :name parsed))
         _ (refuse-duplicates! ctx "checks" (map :name parsed))
         fields (into {} (map (juxt identity input-key)) inputs)
@@ -125,7 +188,7 @@
                          :sources sources :fetches? fetches? :run (compile-body form))))
         _ (topo-check! ctx (map :id cs) (into {} (map (juxt :id :waits)) cs))]
     `(do
-       (def ~bname
+       (def ~(named bname doc)
          {:recognitum/kind :bundle
           :name '~(symbol (str *ns*) (str bname))
           :inputs '~inputs
@@ -151,9 +214,13 @@
                                                   :waits (set (map (comp rid id->name) (:waits c))))])))))
 
 (defn defcopy
-  "The expansion of `(rec/defcopy new-name bundle {check new-check ...})`."
-  [new-name orig renames]
+  "The expansion of `(rec/defcopy new-name \"doc\"? bundle {check new-check ...})`, given the
+  forms after the name."
+  [new-name args]
   (let [ctx {:where (str *ns* "/" new-name)}
+        [doc orig renames & more] (if (string? (first args)) args (cons nil args))
+        _ (when (or more (< (count args) 2))
+            (fail! ctx "defcopy takes a name, a docstring if any, a bundle and a map {check new-name ...}"))
         ov (resolve-var orig)
         _ (when-not (= :bundle (kind-of ov))
             (fail! ctx (str orig (if ov " is not a bundle" " names no bundle var"))))
@@ -178,7 +245,7 @@
                 (fail! ctx (str "new name " n " would redefine " (symbol v))))))
         cs (vals (:checks (copy-bundle b renames qname)))]
     `(do
-       (def ~new-name (copy-bundle (deref (var ~(:name b))) '~renames '~qname))
+       (def ~(named new-name doc) (copy-bundle (deref (var ~(:name b))) '~renames '~qname))
        ~@(emit-check-vars new-name cs)
        (var ~new-name))))
 
@@ -216,7 +283,7 @@
   "The sections after the fields: the checks sections (`rec/checks` and the bundle bindings, each
   `{:marker :clauses}`), then the sections of methods, each `{:marker :methods}` with the
   `:protocol` var or the interface `:class` that heads it. A checks section after a section of
-  methods is refused."
+  methods is refused, and so is metadata on a head other than a bundle's."
   [ctx checks-marker forms]
   (loop [items forms, cur nil, out []]
     (if-let [[x & more] (seq items)]
@@ -226,6 +293,8 @@
           (fail! ctx (str "expected a bundle, rec/checks, a protocol or an interface before " (pr-str x))))
         (let [done (cond-> out cur (conj cur))
               head (some #(when (:methods %) %) done)]
+          (when (and (symbol? x) (or (checks-marker? checks-marker x) (protocol-var x) (interface-named x)))
+            (refuse-meta! ctx x x "name"))
           (cond
             (not (symbol? x))
             (fail! ctx (str "expected a bundle, rec/checks, a protocol, an interface or a clause, got " (pr-str x)))
@@ -427,7 +496,7 @@
         b @v
         ins (set (:inputs b))
         parsed (for [c clauses]
-                 (let [{:keys [name waits body line]} (parse-clause ctx c)
+                 (let [{:keys [name waits body line]} (parse-clause (assoc ctx :input-of marker) c)
                        cctx (assoc fctx :line line :fetch? false
                                    :no-fetch (str "input clause " name))]
                    (when-not (ins name)
@@ -470,13 +539,13 @@
   (let [cctx (assoc fctx :line line :fetch? true)
         target (cond
                  (and override? (qualified-symbol? name))
-                 (let [r (check-ref cctx bound tname name "^:override")]
+                 (let [r (check-ref cctx bound tname name ":override")]
                    (when-not (= :check (:recognitum/kind r))
-                     (fail! cctx (str "^:override " name " names a bundle, not one of its checks")))
+                     (fail! cctx (str ":override " name " names a bundle, not one of its checks")))
                    r)
-                 override? (fail! cctx (str "^:override needs a qualified bundle check, got " name))
+                 override? (fail! cctx (str ":override needs a qualified bundle check, got " name))
                  (qualified-symbol? name)
-                 (fail! cctx (str name " is qualified: mark it ^:override to replace that bundle check"))
+                 (fail! cctx (str name " is qualified: write :override after its waits to replace that bundle check"))
                  :else nil)
         wait-ids (set (mapcat (fn [w]
                                 (cond
@@ -534,15 +603,17 @@
   what [[defchecks]] takes; `:wiring`, the form of the map `recognitum.record/define-type`
   takes as its second argument; and `:strategy`, the proof strategy that form names, which
   answers the class's name and refuses here, at expansion, every definition it would refuse
-  when the type is defined.
+  when the type is defined. With `:unsealed true` in `opts`, it is the expansion of
+  `rec/defproven-in`: the type is defined unsealed, and its constructors check nothing.
 
   The expansion is one form, at the top level or inside another: the methods compile with the
   checks, before the constructors' vars are interned, so a method that does not compile leaves
   nothing. At run time [[defined]] defines the type and imports its class."
-  [env tname fields forms {:keys [compile-body read-macros checks-marker wiring strategy]}]
+  [env tname fields forms {:keys [compile-body read-macros checks-marker wiring strategy unsealed]}]
   (let [ctx {:where (str *ns* "/" tname) :call-env env :owner tname :field-word "field"
              :read-macros read-macros}
-        _ (when-not (simple-symbol? tname) (fail! ctx "defproven takes a plain symbol as the type's name"))
+        _ (when-not (simple-symbol? tname)
+            (fail! ctx (str (if unsealed "defproven-in" "defproven") " takes a plain symbol as the type's name")))
         _ (when-not (and (vector? fields) (every? simple-symbol? fields) (seq fields))
             (fail! ctx "fields are a vector of plain symbols"))
         _ (refuse-duplicates! ctx "fields" fields)
@@ -617,20 +688,27 @@
         t (gensym "type")
         define-it
         `(recognitum.record/define-type
-           {:name '~tag-sym
-            :fields ~(mapv (fn [f] {:key (key-of f) :sym (list 'quote f) :optional? (contains? optional f)}) fields)
-            :checks ~(mapv #(select-keys % [:id :doc :concerns :waits :gate :reads :sources :fetches? :shape-of :run]) all)
-            :interfaces ~interfaces
-            :methods ~(into {} (for [m methods] [(:sig m) (method-fn tname fields key-of m)]))
-            :guard (recognitum.record/guard-maker)
-            :change (recognitum.record/change-guard-maker)}
+           ~(merge
+             `{:name '~tag-sym
+               :fields ~(mapv (fn [f] {:key (key-of f) :sym (list 'quote f) :optional? (contains? optional f)}) fields)
+               :checks ~(mapv #(select-keys % [:id :doc :concerns :waits :gate :reads :sources :fetches? :shape-of :run]) all)
+               :interfaces ~interfaces
+               :methods ~(into {} (for [m methods] [(:sig m) (method-fn tname fields key-of m)]))}
+             (if unsealed
+               {:unsealed true}
+               `{:guard (recognitum.record/guard-maker)
+                 :change (recognitum.record/change-guard-maker)}))
            ~wiring)
         inputs (mapcat (fn [{:keys [sym inputs]}]
                          [(input-sym sym)
                           (into {} (for [[in {:keys [form]}] inputs]
                                      [(keyword (name in)) (body/checked-fn form)]))])
                        bindings)
-        factories (emit-factories tname fields "Runs every check, or throws." t key-of)
+        factories (emit-factories tname fields
+                                  (if unsealed
+                                    "Checks nothing: the value has passed nothing."
+                                    "Runs every check, or throws.")
+                                  t key-of)
         new-vars (set (remove #(.getMapping *ns* %) (map second factories)))]
     `(let [~@inputs
            ~t (recognitum.define/defined ~(:where ctx) '~(ns-name *ns*) '~tname ~classname '~new-vars

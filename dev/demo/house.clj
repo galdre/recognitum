@@ -1,4 +1,4 @@
-(ns recognitum.house
+(ns demo.house
   "A stand-in for the house's records: who it has vetted. It is in memory and logs every call,
   so a caller can see what a check read and how often.")
 

@@ -88,6 +88,20 @@
       (is (= {:error :recognitum/missing-fields :keys #{::b ::c}}
              (select-keys (err #(persistent! (-> (transient u) (dissoc! ::b) (dissoc! ::c)))) [:error :keys]))))))
 
+(rec/defproven Bare [a ^:optional x]
+  rec/checks
+  (x [] (int? x)))
+
+(deftest a-required-field-is-refused-where-every-one-is-absent
+  (is (= {:error :recognitum/missing-fields :keys #{::a}}
+         (select-keys (err #(map->Bare {})) [:error :keys])))
+  (is (= {:error :recognitum/missing-fields :keys #{::a}}
+         (select-keys (err #(rec/seal (rec/draft Bare))) [:error :keys])))
+  (testing "one write that removes it and adds as many keys as the value held"
+    (is (= {:error :recognitum/missing-fields :keys #{::a}}
+           (select-keys (err #(persistent! (-> (transient (map->Bare {::a 1})) (dissoc! ::a) (assoc! ::x 2))))
+                        [:error :keys])))))
+
 (rec/defproven Loose [^:optional x]
   rec/checks
   (x [] (int? x)))
@@ -192,6 +206,39 @@
     (testing "the remedies seal"
       (is (rec/sealed? ((ns-resolve ns' 'map->R) {k 1})))
       (is (instance? new-class (rec/seal (into (rec/draft new-class) {k 1})))))))
+
+(deftest a-draft-made-before-a-redefinition-proves-nothing
+  (let [[_ define] (redefinable 'recognitum.record-test.displaced-proves)
+        k :recognitum.record-test.displaced-proves/a
+        old-class (define)
+        opened (rec/draft (rec/seal (into (rec/draft old-class) {k 1})))
+        built (into (rec/draft old-class) {k 1})
+        _ (rec/check built rec/every)]
+    (is (rec/proves? opened rec/every))
+    (is (rec/proves? built rec/every))
+    (define)
+    (doseq [d [opened built]]
+      (is (= {k 1} (into {} d)))
+      (is (not (rec/proves? d rec/every)))
+      (is (not (rec/proves? d (rec/union)))))))
+
+(deftest a-draft-of-a-value-whose-type-has-no-current-definition-refuses
+  (doseq [[how gone] [[:unmap #(ns-unmap % 'R)]
+                      [:defrecord #(binding [*ns* %] (eval '(defrecord R [a])))]]]
+    (testing (name how)
+      (let [nsym (symbol (str "recognitum.record-test.orphan-" (name how)))
+            [ns' define] (redefinable nsym)
+            _ (define)
+            k (keyword (str nsym) "a")
+            tname (symbol (str nsym) "R")
+            old ((ns-resolve ns' 'map->R) {k 1})]
+        (define)
+        (gone ns')
+        (is (= [(str tname " has no current definition: this value is of a displaced definition, and"
+                     " its name no longer names a definition of the type, so it has no drafts")
+                {:error :recognitum/no-current-definition :type tname}]
+               (try (rec/draft old) nil
+                    (catch clojure.lang.ExceptionInfo e [(ex-message e) (dissoc (ex-data e) :value)]))))))))
 
 (deftest a-value-prints-as-its-tagged-literal
   (is (= "#recognitum.record-test/Pair #:recognitum.record-test{:a 0}" (pr-str v))))

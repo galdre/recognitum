@@ -3,11 +3,11 @@
   (:require
    [clojure.test :refer [deftest is testing]]
    [recognitum.core :as rec]
-   [recognitum.heist :as h]
-   [recognitum.house :as house]
+   [demo.heist :as h]
+   [demo.house :as house]
    [recognitum.record :as record])
   (:import
-   (recognitum.heist Heist)
+   (demo.heist Heist)
    (recognitum.record Draft Memo)))
 
 (defn- err [f]
@@ -28,6 +28,12 @@
   (is (false? (rec/sealed? nil)))
   (is (false? (rec/draft? nil)))
   (is (false? (rec/proves? nil rec/every))))
+
+(deftest a-sorted-map-is-neither-sealed-nor-a-draft
+  (doseq [m [(sorted-map 1 2) (sorted-map-by > 1 2)]]
+    (is (false? (rec/sealed? m)))
+    (is (false? (rec/draft? m)))
+    (is (false? (rec/proves? m rec/every)))))
 
 (deftest a-draft-accepts-any-write
   (let [d (-> (rec/draft Heist) (assoc ::h/take "lots") (assoc :scratch 1))]
@@ -66,7 +72,7 @@
 (deftest seal-refuses-undeclared-keys-before-running-anything
   (let [d (into (rec/draft Heist) (assoc entries :scratch 1))]
     (reset! house/calls [])
-    (is (= {:error :recognitum/undeclared-keys :type 'recognitum.heist/Heist :keys #{:scratch}}
+    (is (= {:error :recognitum/undeclared-keys :type 'demo.heist/Heist :keys #{:scratch}}
            (select-keys (err #(rec/seal d)) [:error :type :keys])))
     (is (empty? @house/calls))
     (is (= #{} (rec/proven-checks d)))
@@ -328,7 +334,7 @@
 (deftest seal-all-reports-a-refused-draft-without-running-it
   (reset! house/calls [])
   (let [e (err #(rec/seal-all [(assoc (heist-draft) :bogus 1)]))]
-    (is (= {:error :recognitum/undeclared-keys :type 'recognitum.heist/Heist :keys #{:bogus}}
+    (is (= {:error :recognitum/undeclared-keys :type 'demo.heist/Heist :keys #{:bogus}}
            (select-keys (get-in e [:failures [0]]) [:error :type :keys])))
     (is (empty? @house/calls))))
 
@@ -394,3 +400,159 @@
     (is (= #{[1]} (set (keys (:failures e)))))
     (is (identical? q (get-in e [:drafts 1 ::h/getaway])))
     (is (= 1 (count @house/calls)))))
+
+;;; ------------------------------------------------------------------ edge cases
+
+(rec/defproven Tray [item]
+  rec/checks
+  (item [] (some? item)))
+
+(deftest seal-refuses-what-is-not-a-draft-or-a-value
+  (is (= :recognitum/not-a-draft (:error (err #(rec/seal {::item 1})))))
+  (is (= :recognitum/not-a-draft (:error (err #(rec/seal {::item 1} rec/every))))))
+
+(def ^:private pair-log (atom []))
+
+(rec/defproven Pair [a b]
+  rec/checks
+  (a [] (swap! pair-log conj ::a) (int? a))
+  (b [] (swap! pair-log conj ::b) (int? b))
+  (b-not-below-a [] (swap! pair-log conj ::b-not-below-a) (>= b a)))
+
+(deftest recheck-all-runs-on-a-sealed-value-what-it-selects-only
+  (let [v (map->Pair {::a 0 ::b 1})]
+    (reset! pair-log [])
+    (is (= [true] (rec/recheck-all [v] ::b-not-below-a)))
+    (is (= [::b-not-below-a] @pair-log))
+    (is (rec/sealed? v))))
+
+(deftest seal-all-seals-a-draft-after-every-draft-it-holds-at-any-depth
+  (let [leaf #(assoc (rec/draft Tray) ::item 1)
+        outer (assoc (rec/draft Tray) ::item [(leaf) (assoc (rec/draft Tray) ::item (leaf))])
+        out (rec/seal-all [outer])]
+    (is (rec/sealed? (first out)))
+    (is (not-any? rec/draft? (tree-seq coll? seq out)))))
+
+(deftest a-displaced-value-still-prints-through-its-own-to-string
+  (let [form '(recognitum.core/defproven Shown [a]
+                recognitum.core/checks (a [] (int? a))
+                Object (toString [this] (str "Shown " a)))
+        _ (binding [*ns* (the-ns 'recognitum.draft-test)] (eval form))
+        v (@(ns-resolve 'recognitum.draft-test 'map->Shown) {::a 1})]
+    (binding [*ns* (the-ns 'recognitum.draft-test)] (eval form))
+    (is (not (rec/sealed? v)))
+    (is (= "Shown 1" (.toString ^Object v)))))
+
+;;; ------------------------------------------------------------------ the walk over records, sorted collections and metadata
+
+(defrecord Plain [a b])
+
+(rec/defproven-in Rack [held]
+  rec/checks
+  (held [] (some? held)))
+
+(defn- tray [item] (assoc (rec/draft Tray) ::item item))
+(defn- failing-tray [] (assoc (rec/draft Tray) ::item nil))
+(def ^:private by-item (fn [x y] (compare (str (::item x)) (str (::item y)))))
+
+(defn- sealed-tray? [x] (and (rec/sealed? x) (instance? Tray x)))
+
+(deftest seal-all-walks-a-plain-record
+  (let [out (rec/seal-all (assoc (->Plain (tray 1) [(tray 2)]) :extra (tray 3)))]
+    (is (instance? Plain out) "a record stays a record of its class")
+    (is (every? sealed-tray? [(:a out) (get-in out [:b 0]) (:extra out)])))
+  (is (= {:m 1} (meta (rec/seal-all (with-meta (->Plain (tray 1) 0) {:m 1})))) "and keeps its metadata")
+  (let [e (err #(rec/seal-all (->Plain (failing-tray) [(failing-tray)])))]
+    (is (= #{[:a] [:b 0]} (set (keys (:failures e)))))
+    (is (instance? Plain (:drafts e)))
+    (is (every? rec/draft? [(get-in e [:drafts :a]) (get-in e [:drafts :b 0])]))))
+
+(deftest seal-all-keeps-sorted-collections-and-their-comparators
+  (let [out (rec/seal-all {:map    (sorted-map :a (tray 1) :b 2)
+                           :map-by (sorted-map-by > 1 (tray 1) 2 (tray 2))
+                           :keys   (sorted-map-by by-item (tray 1) :a (tray 2) :b)
+                           :set    (sorted-set [1 (tray 1)] [2 (tray 2)])
+                           :set-by (sorted-set-by by-item (tray 1) (tray 2))})]
+    (is (every? sorted? (vals out)))
+    (is (= [2 1] (keys (:map-by out))))
+    (is (= (.comparator ^clojure.lang.Sorted (sorted-map-by > 1 2))
+           (.comparator ^clojure.lang.Sorted (:map-by out))))
+    (is (identical? by-item (.comparator ^clojure.lang.Sorted (:keys out))))
+    (is (identical? by-item (.comparator ^clojure.lang.Sorted (:set-by out))))
+    (is (every? sealed-tray? (concat (vals (get out :map-by)) (keys (:keys out)) (map second (:set out))
+                                     (:set-by out) [(get-in out [:map :a])]))))
+  (testing "a failure names its path, and :drafts keeps the collection and its comparator"
+    (let [bad (failing-tray)
+          e (err #(rec/seal-all {:keys (sorted-map-by by-item bad :a) :set-by (sorted-set-by by-item (tray 1) bad)
+                                 :map (sorted-map :a (failing-tray))}))]
+      (is (= #{[:keys bad :recognitum.core/key] [:set-by bad] [:map :a]} (set (keys (:failures e)))))
+      (is (identical? by-item (.comparator ^clojure.lang.Sorted (get-in e [:drafts :keys]))))
+      (is (identical? by-item (.comparator ^clojure.lang.Sorted (get-in e [:drafts :set-by]))))
+      (is (every? rec/draft? (get-in e [:drafts :set-by]))))))
+
+(deftest seal-all-keeps-metadata
+  (let [m {:m 1}
+        shape {:map    (with-meta {:a (tray 1)} m)
+               :vec    (with-meta [(tray 1)] m)
+               :list   (with-meta (list (tray 1)) m)
+               :lazy   (with-meta (map identity [(tray 1)]) m)
+               :set    (with-meta #{(tray 1)} m)
+               :sorted (with-meta (sorted-map :a (tray 1)) m)
+               :record (with-meta (->Plain (tray 1) nil) m)}
+        out (rec/seal-all shape)]
+    (doseq [[k v] out]
+      (is (= m (meta v)) (str k " keeps its metadata")))
+    (is (list? (:list out)))
+    (is (vector? (:lazy out)) "a sequence becomes a vector holding its metadata")
+    (testing "and so does :drafts"
+      (let [e (err #(rec/seal-all [(with-meta (list 0 (failing-tray)) m) (with-meta (map identity [(failing-tray)]) m)]))]
+        (is (= #{[0 1] [1 0]} (set (keys (:failures e)))))
+        (is (= [m m] (map meta (:drafts e))))))))
+
+(deftest seal-all-walks-nests-of-these
+  (let [m {:r 1}
+        shape (with-meta (->Plain (sorted-map :k (with-meta [(tray 1) #{(tray 2)}] {:v 1}))
+                                  (with-meta (list (sorted-set-by by-item (tray 3))) {:l 1}))
+                m)
+        out (rec/seal-all shape)]
+    (is (instance? Plain out))
+    (is (= m (meta out)))
+    (is (= {:v 1} (meta (get-in out [:a :k]))))
+    (is (= {:l 1} (meta (:b out))))
+    (is (identical? by-item (.comparator ^clojure.lang.Sorted (first (:b out)))))
+    (is (not-any? rec/draft? (tree-seq coll? seq out))))
+  (let [e (err #(rec/seal-all (->Plain (sorted-map :k [0 #{(failing-tray)}]) (list (sorted-set-by by-item (failing-tray))))))]
+    (is (= 2 (count (:failures e))))
+    (is (= #{[:a :k 1] [:b 0]} (set (map #(subvec % 0 (dec (count %))) (keys (:failures e))))))))
+
+(deftest seal-all-enters-a-defproven-in-value-holding-these
+  (let [m {:m 1}
+        out (rec/seal-all [(map->Rack {::held (with-meta (sorted-map :k (->Plain (tray 1) nil)) m)})])
+        held (::held (first out))]
+    (is (instance? Rack (first out)))
+    (is (sorted? held))
+    (is (= m (meta held)))
+    (is (instance? Plain (:k held)))
+    (is (sealed-tray? (get-in held [:k :a]))))
+  (is (= #{[0 ::held :k :a]}
+         (set (keys (:failures (err #(rec/seal-all [(map->Rack {::held (sorted-map :k (->Plain (failing-tray) nil))})]))))))))
+
+(deftest drafting-all-opens-sealed-values-in-these-and-keeps-them
+  (let [v (rec/seal (tray 1))
+        m {:m 1}
+        shape {:record (with-meta (->Plain v nil) m)
+               :keys   (sorted-map-by by-item v :a)
+               :set-by (with-meta (sorted-set-by by-item v) m)
+               :list   (with-meta (list v) m)
+               :entry  (first {v v})}
+        seen (atom nil)
+        out (rec/drafting-all shape (fn [s] (reset! seen s) s))]
+    (is (every? rec/draft? [(get-in @seen [:record :a]) (key (first (:keys @seen))) (first (:set-by @seen))
+                            (first (:list @seen)) (key (:entry @seen)) (val (:entry @seen))]))
+    (is (every? sealed-tray? [(get-in out [:record :a]) (key (first (:keys out))) (first (:set-by out))
+                              (first (:list out)) (key (:entry out)) (val (:entry out))]))
+    (is (instance? Plain (:record out)))
+    (is (map-entry? (:entry out)))
+    (is (identical? by-item (.comparator ^clojure.lang.Sorted (:keys out))))
+    (is (identical? by-item (.comparator ^clojure.lang.Sorted (:set-by out))))
+    (is (= [m m m] (map (comp meta out) [:record :set-by :list])))))

@@ -262,6 +262,28 @@
 (defn- unprefix [m] (into {} (map (fn [[k v]] [(keyword (name k)) v])) m))
 (defn- read-printed [s] (unprefix (clojure.edn/read-string {:default (fn [_ v] v)} s)))
 
+;;; ------------------------------------------------------------ a type of 200 fields
+
+;; `BenchWide200` has two hundred fields and no checks; `w150`, which the rows write and
+;; remove, is optional. Its twin is a plain hash map of the same
+;; entries: a `defrecord` of more than about 120 fields does not compile ("Method code too
+;; large"), so a map is what a hand-rolled program of this width holds. Past 160 fields the
+;; library splits the methods whose code grows with the fields, so that none is too long for
+;; the JIT to compile; these rows time the methods it splits.
+
+(defmacro ^:private def-wide-200 []
+  `(rec/defproven ~'BenchWide200 [~@(for [i (range 200) :let [f (symbol (str "w" i))]]
+                                      (if (= i 150) (vary-meta f assoc :optional true) f))]))
+
+(def-wide-200)
+
+(defn- wide-200-entries [k] (into {} (for [i (range 200)] [(k (str "w" i)) (Long/valueOf (long (+ 1000 i)))])))
+
+(def ^:private w200-base (wide-200-entries keyword))
+(def ^:private w200-qbase (wide-200-entries #(keyword "recognitum.bench" %)))
+(def ^:private pw200 (into {} w200-base))
+(def ^:private bw200 (map->BenchWide200 w200-qbase))
+
 (def map-rows
   "The map rows, each `:lib` on a `BenchWide` value against `:base` on its record twin. A row
   with `:same?` compares the two answers with it, since they differ in form."
@@ -290,7 +312,14 @@
    {:id :into-one :label "into a field no check reads" :base #(into pw {:note 7}) :lib #(into bw {::note 7})}
    {:id :conj-one :label "conj a field no check reads" :base #(conj pw [:note 7]) :lib #(conj bw [::note 7])}
    {:id :pr-str :label "pr-str" :base #(pr-str pw) :lib #(pr-str bw)
-    :same? (fn [theirs mine] (= (read-printed theirs) (read-printed mine)))}])
+    :same? (fn [theirs mine] (= (read-printed theirs) (read-printed mine)))}
+   {:id :wide-get :label "get a field, 200 fields" :base #(get pw200 :w150) :lib #(get bw200 ::w150)}
+   {:id :wide-reduce-kv :label "reduce-kv over the values, 200 fields"
+    :base #(reduce-kv sum-vals 0 pw200) :lib #(reduce-kv sum-vals 0 bw200)}
+   {:id :wide-assoc :label "assoc a field, 200 fields" :base #(assoc pw200 :w150 7) :lib #(assoc bw200 ::w150 7)}
+   {:id :wide-dissoc :label "dissoc a field, 200 fields" :base #(dissoc pw200 :w150) :lib #(dissoc bw200 ::w150)}
+   {:id :wide-construct :label "construct from a map (map->), 200 fields"
+    :base #(into {} w200-base) :lib #(map->BenchWide200 w200-qbase)}])
 
 ;;; ----------------------------------------------------------------------- rows
 

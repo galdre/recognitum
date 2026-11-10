@@ -3,14 +3,10 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
-   [recognitum.authz :as authz]
-   [recognitum.demo :as demo]
-   [recognitum.orders :as orders]))
+   [demo.authz :as authz]
+   [demo.orders :as orders]))
 
 (defn- printed [main] (with-out-str (main)))
-
-(deftest the-heist-demo-runs
-  (is (str/includes? (printed demo/-main) "only-crew-get-cuts")))
 
 (deftest the-refund-walkthrough-runs
   (let [out (printed authz/-main)]

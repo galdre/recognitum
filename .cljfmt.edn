@@ -1,7 +1,11 @@
 {:paths ["src" "test" "dev" "bench" "resources" "design"]
- :extra-indents {recognitum.core/defproven   [[:block 2] [:inner 1]]
-                 recognitum.core/defchecks   [[:block 2] [:inner 1]]
-                 recognitum.core/defcopy     [[:block 2]]
-                 recognitum.core/defconcern  [[:block 1]]
-                 recognitum.core/when-extant [[:block 1]]
-                 fn*                         [[:inner 0]]}}
+ :extra-indents {recognitum.core/defproven             [[:block 2] [:inner 1]]
+                 recognitum.core/defproven-in          [[:block 2] [:inner 1]]
+                 recognitum.core/defchecks             [[:inner 0] [:inner 1]]
+                 recognitum.core/defcopy               [[:inner 0]]
+                 recognitum.core/defconcern            [[:block 1]]
+                 recognitum.core/defcontext            [[:inner 0]]
+                 recognitum.core/when-extant           [[:block 1]]
+                 fn*                                   [[:inner 0]]
+                 clojure.test.check.properties/for-all [[:block 1]]
+                 clojure.test.check.generators/let     [[:block 1]]}}

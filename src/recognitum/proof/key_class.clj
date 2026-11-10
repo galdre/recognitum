@@ -50,12 +50,27 @@
        ClassValue, that it made it, so the keyless `marked?` answers test(check) of its own
        drafts and false of any other object, whatever its class is named.
 
-  T$New is an AFn whose invoke(key, data) returns new T(key, data), for the handle's seal; it
-  holds no key. T$I's constructor is package-private: only T makes one.
+  An unsealed definition's T differs in these: it also implements recognitum.proof.Built
+  and holds a private final `mem`, which memory$() answers; its one public constructor is
+  T(Object key, Object data, Object mem); it has no guards and no constructor taking every
+  field; a change takes the new value's memory from the last element of what CHG answered,
+  after the pairs; assocEx is assoc where the key is absent. Its handle seals nothing and
+  proves nothing; install-carry! sets CHG, a WRITES that nothing calls, and a GATE with the
+  write's three-argument arity alone. `define` records on the class, through a ClassValue,
+  that it made it, so the keyless `memory` answers memory$() of its own values and nil of
+  anything else.
+
+  T$New is an AFn whose invoke(key, data) returns new T(key, data), for the handle's seal, or
+  of an unsealed T invoke(key, data, mem), for its build; it holds no key. T$I's constructor
+  is package-private: only T makes one.
 
   An assoc of declared key K<i> is a private method assoc$i of its own, which the JIT inlines
   into the call site's assoc; where its guard returns it calls a private constructor taking
-  every field, as a defrecord's assoc does. A definition declares at most 250 keys.
+  every field, as a defrecord's assoc does. A definition declares at most 250 keys. Past 160,
+  a wide T reads a declared key's field through a private field$(i), the index from index$,
+  counts its present fields in a private present$(), and walks its fields in chunks, private
+  methods reduce$c, kvreduce$c and fill$c, so that no method passes HotSpot's 8000 bytes and
+  runs interpreted; a T of at most 160 keys has none of these.
 
   T.KEY is a package-private static made in <clinit>. claim(fns, removed) hands it out
   once, to `define-type`. Besides recognitum.proof.Proven, defined by a namespace that is never
@@ -318,9 +333,9 @@
 
 (defn- maker-bytes
   "T$New's bytes: an AFn whose invoke(key, data) returns new T(key, data), so the handle calls
-  T's constructor without reflection. It holds no key: T's constructor still checks the one it
-  is given."
-  [t]
+  T's constructor without reflection; of an unsealed T, invoke(key, data, mem) returns
+  new T(key, data, mem). It holds no key: T's constructor still checks the one it is given."
+  [t unsealed?]
   (let [cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
         afn (iname clojure.lang.AFn)]
     (.visit cw Opcodes/V1_8 (bit-or Opcodes/ACC_PUBLIC Opcodes/ACC_FINAL Opcodes/ACC_SUPER) (str t "$New") nil afn
@@ -329,14 +344,15 @@
       (aload! 0)
       (.visitMethodInsn Opcodes/INVOKESPECIAL afn "<init>" "()V" false)
       (op! Opcodes/RETURN) (end!))
-    (doto (method cw Opcodes/ACC_PUBLIC "invoke" (str "(" OBJ-D OBJ-D ")" OBJ-D))
-      (.visitTypeInsn Opcodes/NEW t)
-      (op! Opcodes/DUP)
-      (aload! 1)
-      (aload! 2)
-      (.visitMethodInsn Opcodes/INVOKESPECIAL t "<init>" (str "(" OBJ-D OBJ-D ")V") false)
-      (op! Opcodes/ARETURN)
-      (end!))
+    (let [args (if unsealed? 3 2)
+          desc (apply str (repeat args OBJ-D))
+          mv   (method cw Opcodes/ACC_PUBLIC "invoke" (str "(" desc ")" OBJ-D))]
+      (.visitTypeInsn mv Opcodes/NEW t)
+      (op! mv Opcodes/DUP)
+      (dotimes [i args] (aload! mv (inc i)))
+      (.visitMethodInsn mv Opcodes/INVOKESPECIAL t "<init>" (str "(" desc ")V") false)
+      (op! mv Opcodes/ARETURN)
+      (end! mv))
     (.visitEnd cw)
     (.toByteArray cw)))
 
@@ -389,6 +405,48 @@
   255 slots, this and meta, ext and the count among them. A defrecord's constructor has the
   same bound."
   250)
+
+(def ^:private inline-keys
+  "The most declared keys whose code each method of T holds inline. HotSpot compiles no method
+  of more than 8000 bytes of code, and past this width the longest per-key methods would pass
+  that and run interpreted. A wider T, a wide one, reads a declared key's field through
+  field$(i), the index from index$, counts its present fields in present$(), and walks its
+  fields in chunks, each a private method of its own."
+  160)
+
+(defn- wide? [n] (> n inline-keys))
+
+(defn- chunks
+  "The key index ranges [lo hi) a T of `n` keys walks its fields in: one range where it is
+  not wide, else as few ranges of near-equal size as hold at most inline-keys keys each."
+  [n]
+  (let [c (max 1 (quot (+ n inline-keys -1) inline-keys))
+        size (max 1 (quot (+ n c -1) c))]
+    (for [lo (range 0 n size)] [lo (min n (+ lo size))])))
+
+(defn- load-field-at
+  "this.field$(local[slot]): of a wide T, the field of the declared key at the index in int local `slot`."
+  [^MethodVisitor mv t slot]
+  (aload! mv 0)
+  (.visitVarInsn mv Opcodes/ILOAD (int slot))
+  (.visitMethodInsn mv Opcodes/INVOKESPECIAL t "field$" (str "(I)" OBJ-D) false))
+
+(defn- by-field!
+  "For a key in local `slot` that T declares: (body load!), load! pushing its field, the body
+  ending in a return or a jump; after it, the code for a key not declared. Where T is not
+  wide, by-key! with a body per key; where it is, one body that reads the field at
+  index$(key), kept in int local `i`, so the method's size does not grow with the keys."
+  [^MethodVisitor mv t ks slot i body]
+  (if (wide? (count ks))
+    (let [undeclared (Label.)]
+      (aload! mv slot)
+      (.visitMethodInsn mv Opcodes/INVOKESTATIC t "index$" (str "(" OBJ-D ")I") false)
+      (.visitVarInsn mv Opcodes/ISTORE (int i))
+      (.visitVarInsn mv Opcodes/ILOAD (int i))
+      (jump! mv Opcodes/IFLT undeclared)
+      (body #(load-field-at mv t i))
+      (.visitLabel mv undeclared))
+    (by-key! mv t ks slot (fn [j] (body #(load-field mv t j))))))
 
 (defn- flat-desc
   "The descriptor of T's constructor taking meta, ext, the count and the n fields."
@@ -550,37 +608,60 @@
 
 (defn- fold-methods!
   "reduce(f, init) calls f with each entry, kvreduce(f, init) with each key and value: the
-  present fields in the order of the keys, then ext's entries, stopping at a reduced."
+  present fields in the order of the keys, then ext's entries, stopping at a reduced. A wide
+  T walks its fields in chunks, each a private method reduce$c or kvreduce$c(f, acc) that
+  answers the accumulation, a reduced one as it is."
   [^ClassWriter cw t n folds]
-  (let [pub Opcodes/ACC_PUBLIC ret Opcodes/ARETURN]
+  (let [pub Opcodes/ACC_PUBLIC ret Opcodes/ARETURN
+        desc (str "(" IFN-D OBJ-D ")" OBJ-D)
+        ;; if (RT.isReduced(local 2)) (reduced!); with `deref?`, return its deref, else return it
+        reduced! (fn [^MethodVisitor mv deref?]
+                   (let [go-on (Label.)]
+                     (aload! mv 2)
+                     (.visitMethodInsn mv Opcodes/INVOKESTATIC (iname RT) "isReduced" (str "(" OBJ-D ")Z") false)
+                     (jump! mv Opcodes/IFEQ go-on)
+                     (aload! mv 2)
+                     (when deref? (cast! mv clojure.lang.IDeref) (invoke! mv clojure.lang.IDeref "deref"))
+                     (op! mv ret)
+                     (.visitLabel mv go-on)))]
     (doseq [[nm _] folds]
-      (let [mv (method cw pub nm (str "(" IFN-D OBJ-D ")" OBJ-D))
-            kv? (= nm "kvreduce")
-            step! (fn [push!]
-                    (let [go-on (Label.)]
-                      (aload! mv 1) (aload! mv 2) (push!)
-                      (if kv?
-                        (.visitMethodInsn mv Opcodes/INVOKEINTERFACE IFN "invoke" (str "(" OBJ-D OBJ-D OBJ-D ")" OBJ-D) true)
-                        (.visitMethodInsn mv Opcodes/INVOKEINTERFACE IFN "invoke" (str "(" OBJ-D OBJ-D ")" OBJ-D) true))
-                      (astore! mv 2)
-                      (aload! mv 2)
-                      (.visitMethodInsn mv Opcodes/INVOKESTATIC (iname RT) "isReduced" (str "(" OBJ-D ")Z") false)
-                      (jump! mv Opcodes/IFEQ go-on)
-                      (aload! mv 2) (cast! mv clojure.lang.IDeref) (invoke! mv clojure.lang.IDeref "deref") (op! mv ret)
-                      (.visitLabel mv go-on)))
+      (let [kv? (= nm "kvreduce")
+            ;; local 2 = f.invoke(local 2, (push!)), then reduced!
+            step! (fn [^MethodVisitor mv deref? push!]
+                    (aload! mv 1) (aload! mv 2) (push!)
+                    (if kv?
+                      (.visitMethodInsn mv Opcodes/INVOKEINTERFACE IFN "invoke" (str "(" OBJ-D OBJ-D OBJ-D ")" OBJ-D) true)
+                      (.visitMethodInsn mv Opcodes/INVOKEINTERFACE IFN "invoke" (str "(" OBJ-D OBJ-D ")" OBJ-D) true))
+                    (astore! mv 2)
+                    (reduced! mv deref?))
+            fields! (fn [^MethodVisitor mv deref? lo hi]
+                      (doseq [i (range lo hi)]
+                        (unless-absent! mv t i
+                                        #(step! mv deref?
+                                                (fn []
+                                                  (load-key mv t i) (load-field mv t i)
+                                                  (when-not kv?
+                                                    (.visitMethodInsn mv Opcodes/INVOKESTATIC "clojure/lang/MapEntry" "create"
+                                                                      (str "(" OBJ-D OBJ-D ")Lclojure/lang/MapEntry;") false)))))))
+            mv (method cw pub nm desc)
             top (Label.) end (Label.)]
-        (dotimes [i n]
-          (unless-absent! mv t i
-                          #(step! (fn []
-                                    (load-key mv t i) (load-field mv t i)
-                                    (when-not kv?
-                                      (.visitMethodInsn mv Opcodes/INVOKESTATIC "clojure/lang/MapEntry" "create"
-                                                        (str "(" OBJ-D OBJ-D ")Lclojure/lang/MapEntry;") false))))))
+        (if (wide? n)
+          (doseq [[c [lo hi]] (map-indexed vector (chunks n))
+                  :let [part (str nm "$" c)
+                        cm (method cw Opcodes/ACC_PRIVATE part desc)]]
+            (fields! cm false lo hi)
+            (aload! cm 2) (op! cm ret) (end! cm)
+            (aload! mv 0) (aload! mv 1) (aload! mv 2)
+            (.visitMethodInsn mv Opcodes/INVOKESPECIAL t part desc false)
+            (astore! mv 2)
+            (reduced! mv true))
+          (fields! mv true 0 n))
         (load-ext mv t) (invoke! mv clojure.lang.Seqable "seq") (astore! mv 3)
         (.visitLabel mv top)
         (aload! mv 3) (jump! mv Opcodes/IFNULL end)
         (aload! mv 3) (invoke! mv clojure.lang.ISeq "first") (astore! mv 4)
-        (step! (fn []
+        (step! mv true
+               (fn []
                  (aload! mv 4)
                  (when kv?
                    (cast! mv java.util.Map$Entry)
@@ -622,8 +703,11 @@
 
 (defn- value-class-bytes
   "T's bytes. `ifaces` are the listed interfaces T implements; `plan` the methods that
-  forward, each to the function at its index in FNS; `ks` the declared keys, one field each."
-  [t ifaces plan ks]
+  forward, each to the function at its index in FNS; `ks` the declared keys, one field each.
+  An unsealed T also holds a memory, `mem`, which its constructor takes after the data and
+  memory$() answers, and which a change takes from the last element of what CHG answered;
+  it has no guards, and its assocEx is its assoc where the key is absent."
+  [t ifaces plan ks unsealed?]
   (let [cw    (ClassWriter. ClassWriter/COMPUTE_FRAMES)
         super (iname clojure.lang.APersistentMap)
         n     (count ks)
@@ -632,14 +716,37 @@
         stat  Opcodes/ACC_STATIC
         fin   Opcodes/ACC_FINAL
         ret   Opcodes/ARETURN
-        folds (folds-of plan)]
+        folds (folds-of plan)
+        ;; int local `slot` = the count of present fields
+        count! (fn [^MethodVisitor mv slot]
+                 (op! mv Opcodes/ICONST_0)
+                 (.visitVarInsn mv Opcodes/ISTORE (int slot))
+                 (dotimes [i n] (unless-absent! mv t i #(.visitIincInsn mv slot 1))))
+        ;; the same, of a wide T by a call of present$()
+        present! (fn [^MethodVisitor mv slot]
+                   (if (wide? n)
+                     (do (aload! mv 0)
+                         (.visitMethodInsn mv Opcodes/INVOKESPECIAL t "present$" "()I" false)
+                         (.visitVarInsn mv Opcodes/ISTORE (int slot)))
+                     (count! mv slot)))
+        ;; for each present field of the keys lo to hi: local[a][p] = K<i>, local[a][p + 1] = f<i>, p += 2
+        fill! (fn [^MethodVisitor mv a p lo hi]
+                (doseq [i (range lo hi)]
+                  (unless-absent! mv t i
+                                  (fn []
+                                    (aload! mv a) (.visitVarInsn mv Opcodes/ILOAD (int p)) (load-key mv t i) (op! mv Opcodes/AASTORE)
+                                    (aload! mv a) (.visitVarInsn mv Opcodes/ILOAD (int p)) (op! mv Opcodes/ICONST_1 Opcodes/IADD)
+                                    (load-field mv t i) (op! mv Opcodes/AASTORE)
+                                    (.visitIincInsn mv p 2)))))]
     (.visit cw Opcodes/V1_8 (bit-or pub fin Opcodes/ACC_SUPER) t nil super
-            (into-array String (concat [(iname clojure.lang.IObj) (iname clojure.lang.IEditableCollection)
-                                        (iname clojure.lang.IMapIterable)
-                                        (iname recognitum.proof.Proven)]
-                                       (when (pos? n) [(iname clojure.lang.IKeywordLookup)])
-                                       (map (comp iname second) folds)
-                                       (map iname ifaces))))
+            (into-array String (distinct
+                                (concat [(iname clojure.lang.IObj) (iname clojure.lang.IEditableCollection)
+                                         (iname clojure.lang.IMapIterable)
+                                         (iname recognitum.proof.Proven)]
+                                        (when unsealed? [(iname recognitum.proof.Built)])
+                                        (when (pos? n) [(iname clojure.lang.IKeywordLookup)])
+                                        (map (comp iname second) folds)
+                                        (map iname ifaces)))))
     (doseq [[acc nm d] (concat [[(bit-or stat fin) "KEY" OBJ-D]
                                 [(bit-or stat fin) "ABSENT" OBJ-D]
                                 [(bit-or priv stat) "claimed" "Z"]
@@ -651,6 +758,7 @@
                                 [(bit-or priv fin) "ext" IPM-D]
                                 [(bit-or priv fin) "_meta" IPM-D]
                                 [(bit-or priv fin) "cnt" "I"]]
+                               (when unsealed? [[(bit-or priv fin) "mem" OBJ-D]])
                                (for [i (range n)] [(bit-or priv stat fin) (str "K" i) OBJ-D])
                                (for [i (range n)] [(bit-or priv stat Opcodes/ACC_VOLATILE) (str "G" i) IFN-D])
                                (for [i (range n)] [fin (str "f" i) OBJ-D]))]
@@ -726,10 +834,13 @@
     (doto (method cw (bit-or pub stat) "gate" (str "()" IFN-D))
       (static! t "GATE" IFN-D)
       (op! ret) (end!))
-    ;; public T(Object key, Object data): the key is checked before super() runs. Each field
-    ;; takes data's entry under its key, or ABSENT; ext takes the other entries.
-    (let [mv (method cw pub "<init>" (str "(" OBJ-D OBJ-D ")V"))
-          ok (Label.)]
+    ;; public T(Object key, Object data), of an unsealed T T(Object key, Object data, Object
+    ;; mem): the key is checked before super() runs. Each field takes data's entry under its
+    ;; key, or ABSENT; ext takes the other entries; mem takes mem.
+    (let [mv (method cw pub "<init>" (str "(" OBJ-D OBJ-D (when unsealed? OBJ-D) ")V"))
+          ok (Label.)
+          m  (if unsealed? 4 3)
+          c  (inc m)]
       (require-key! mv t 1 (no-key-message t))
       (aload! mv 2)
       (.visitTypeInsn mv Opcodes/INSTANCEOF IPM)
@@ -740,24 +851,24 @@
       (.visitMethodInsn mv Opcodes/INVOKESPECIAL super "<init>" "()V" false)
       (aload! mv 2)
       (cast! mv clojure.lang.IPersistentMap)
-      (astore! mv 3)
+      (astore! mv m)
+      (when unsealed?
+        (aload! mv 0) (aload! mv 3) (.visitFieldInsn mv Opcodes/PUTFIELD t "mem" OBJ-D))
       (dotimes [i n]
         (aload! mv 0)
-        (aload! mv 3)
+        (aload! mv m)
         (load-key mv t i)
         (load-absent mv t)
         (invoke! mv clojure.lang.ILookup "valAt" Object Object)
         (.visitFieldInsn mv Opcodes/PUTFIELD t (str "f" i) OBJ-D))
       (if (zero? n)
-        (do (aload! mv 0) (aload! mv 3))
+        (do (aload! mv 0) (aload! mv m))
         ;; ext = data.count() == present ? {} : data without each declared key
         (let [some-other (Label.) done (Label.)]
-          (op! mv Opcodes/ICONST_0)
-          (.visitVarInsn mv Opcodes/ISTORE 4)
-          (dotimes [i n] (unless-absent! mv t i #(.visitIincInsn mv 4 1)))
-          (aload! mv 3)
+          (present! mv c)
+          (aload! mv m)
           (invoke! mv clojure.lang.Counted "count")
-          (.visitVarInsn mv Opcodes/ILOAD 4)
+          (.visitVarInsn mv Opcodes/ILOAD c)
           (jump! mv Opcodes/IF_ICMPNE some-other)
           (aload! mv 0)
           (static! mv "clojure/lang/PersistentArrayMap" "EMPTY" "Lclojure/lang/PersistentArrayMap;")
@@ -765,13 +876,13 @@
           (jump! mv Opcodes/GOTO done)
           (.visitLabel mv some-other)
           (aload! mv 0)
-          (aload! mv 3)
+          (aload! mv m)
           (dotimes [i n]
             (load-key mv t i)
             (invoke! mv clojure.lang.IPersistentMap "without" Object))
           (.visitLabel mv done)))
       (.visitFieldInsn mv Opcodes/PUTFIELD t "ext" IPM-D)
-      (aload! mv 0) (aload! mv 3) (invoke! mv clojure.lang.Counted "count")
+      (aload! mv 0) (aload! mv m) (invoke! mv clojure.lang.Counted "count")
       (.visitFieldInsn mv Opcodes/PUTFIELD t "cnt" "I")
       ;; _meta = data instanceof IMeta ? ((IMeta) data).meta() : null
       (let [no-meta (Label.)]
@@ -786,11 +897,12 @@
         (.visitLabel mv no-meta))
       (op! mv Opcodes/RETURN)
       (end! mv))
-    ;; private T(T src, IPersistentMap meta): src's entries, new meta
+    ;; private T(T src, IPersistentMap meta): src's entries and memory, new meta
     (let [mv (method cw priv "<init>" (str "(L" t ";" IPM-D ")V"))]
       (aload! mv 0)
       (.visitMethodInsn mv Opcodes/INVOKESPECIAL super "<init>" "()V" false)
-      (doseq [[f d] (list* ["ext" IPM-D] ["cnt" "I"] (for [i (range n)] [(str "f" i) OBJ-D]))]
+      (doseq [[f d] (concat [["ext" IPM-D] ["cnt" "I"]] (when unsealed? [["mem" OBJ-D]])
+                            (for [i (range n)] [(str "f" i) OBJ-D]))]
         (aload! mv 0)
         (aload! mv 1)
         (.visitFieldInsn mv Opcodes/GETFIELD t f d)
@@ -801,8 +913,8 @@
       (op! mv Opcodes/RETURN)
       (end! mv))
     ;; private T(IPersistentMap meta, IPersistentMap ext, int cnt, Object f0, ...): the
-    ;; fields as given. Only assoc calls it, where a guard returned.
-    (when (pos? n)
+    ;; fields as given. Only assoc calls it, where a guard returned; an unsealed T has none.
+    (when (and (pos? n) (not unsealed?))
       (let [mv (method cw priv "<init>" (flat-desc n))]
         (aload! mv 0)
         (.visitMethodInsn mv Opcodes/INVOKESPECIAL super "<init>" "()V" false)
@@ -818,6 +930,23 @@
       (by-key! mv t ks 0 (fn [i] (push-int! mv i) (op! mv Opcodes/IRETURN)))
       (op! mv Opcodes/ICONST_M1 Opcodes/IRETURN)
       (end! mv))
+    ;; of a wide T: private Object field$(int i), the field of the i-th declared key; private
+    ;; int present$(), how many fields are present
+    (when (wide? n)
+      (let [mv (method cw priv "field$" (str "(I)" OBJ-D))
+            labels (vec (repeatedly n #(Label.))) dflt (Label.)]
+        (.visitVarInsn mv Opcodes/ILOAD 1)
+        (.visitTableSwitchInsn mv 0 (dec n) dflt (into-array Label labels))
+        (dotimes [i n]
+          (.visitLabel mv (labels i))
+          (load-field mv t i) (op! mv ret))
+        (.visitLabel mv dflt)
+        (throw! mv IndexOutOfBoundsException "no declared key has this index")
+        (end! mv))
+      (doto (method cw priv "present$" "()I")
+        (count! 1)
+        (.visitVarInsn Opcodes/ILOAD 1) (op! Opcodes/IRETURN)
+        (end!)))
     ;; private static int delta$(Object was, Object now): how a field's change moves the count
     (let [mv (method cw (bit-or priv stat) "delta$" (str "(" OBJ-D OBJ-D ")I"))
           present (Label.) same (Label.)]
@@ -832,10 +961,17 @@
       (end! mv))
     ;; private T(T src, Object[] ch): src's entries and meta with ch's pairs k, v applied in
     ;; order, v REMOVED for a removal. Only the changes call it, with the pairs CHG answered.
+    ;; Of an unsealed T, ch's last element is the new value's memory, after the pairs.
     (let [mv (method cw priv "<init>" (str "(L" t ";[" OBJ-D ")V"))
           top (Label.) nxt (Label.) done (Label.) put-ext (Label.)]
       (aload! mv 0)
       (.visitMethodInsn mv Opcodes/INVOKESPECIAL super "<init>" "()V" false)
+      ;; of an unsealed T, local 10: where the pairs end; mem: the element there
+      (when unsealed?
+        (aload! mv 2) (op! mv Opcodes/ARRAYLENGTH Opcodes/ICONST_1 Opcodes/ISUB)
+        (.visitVarInsn mv Opcodes/ISTORE 10)
+        (aload! mv 0) (aload! mv 2) (.visitVarInsn mv Opcodes/ILOAD 10) (op! mv Opcodes/AALOAD)
+        (.visitFieldInsn mv Opcodes/PUTFIELD t "mem" OBJ-D))
       (doseq [[f d] (cons ["_meta" IPM-D] (for [i (range n)] [(str "f" i) OBJ-D]))]
         (aload! mv 0) (aload! mv 1)
         (.visitFieldInsn mv Opcodes/GETFIELD t f d)
@@ -847,7 +983,10 @@
       (.visitVarInsn mv Opcodes/ISTORE 7)
       (op! mv Opcodes/ICONST_0) (.visitVarInsn mv Opcodes/ISTORE 4)
       (.visitLabel mv top)
-      (.visitVarInsn mv Opcodes/ILOAD 4) (aload! mv 2) (op! mv Opcodes/ARRAYLENGTH)
+      (.visitVarInsn mv Opcodes/ILOAD 4)
+      (if unsealed?
+        (.visitVarInsn mv Opcodes/ILOAD 10)
+        (do (aload! mv 2) (op! mv Opcodes/ARRAYLENGTH)))
       (jump! mv Opcodes/IF_ICMPGE done)
       (aload! mv 2) (.visitVarInsn mv Opcodes/ILOAD 4) (op! mv Opcodes/AALOAD) (astore! mv 5)
       (aload! mv 2) (.visitVarInsn mv Opcodes/ILOAD 4) (op! mv Opcodes/ICONST_1 Opcodes/IADD Opcodes/AALOAD) (astore! mv 6)
@@ -867,16 +1006,20 @@
           (aload! mv 6)
           (.visitLabel mv put)
           (astore! mv 8)
-          (.visitVarInsn mv Opcodes/ILOAD 9)
-          (.visitTableSwitchInsn mv 0 (dec n) undeclared (into-array Label labels))
-          (dotimes [i n]
-            (.visitLabel mv (labels i))
-            (load-field mv t i) (aload! mv 8)
-            (.visitMethodInsn mv Opcodes/INVOKESTATIC t "delta$" (str "(" OBJ-D OBJ-D ")I") false)
-            (.visitVarInsn mv Opcodes/ILOAD 7) (op! mv Opcodes/IADD) (.visitVarInsn mv Opcodes/ISTORE 7)
-            (aload! mv 0) (aload! mv 8)
-            (.visitFieldInsn mv Opcodes/PUTFIELD t (str "f" i) OBJ-D)
-            (jump! mv Opcodes/GOTO nxt))
+          ;; local 7 += delta$(field, v): per key where T is not wide, else once, through field$
+          (let [delta! (fn [load!]
+                         (load!) (aload! mv 8)
+                         (.visitMethodInsn mv Opcodes/INVOKESTATIC t "delta$" (str "(" OBJ-D OBJ-D ")I") false)
+                         (.visitVarInsn mv Opcodes/ILOAD 7) (op! mv Opcodes/IADD) (.visitVarInsn mv Opcodes/ISTORE 7))]
+            (when (wide? n) (delta! #(load-field-at mv t 9)))
+            (.visitVarInsn mv Opcodes/ILOAD 9)
+            (.visitTableSwitchInsn mv 0 (dec n) undeclared (into-array Label labels))
+            (dotimes [i n]
+              (.visitLabel mv (labels i))
+              (when-not (wide? n) (delta! #(load-field mv t i)))
+              (aload! mv 0) (aload! mv 8)
+              (.visitFieldInsn mv Opcodes/PUTFIELD t (str "f" i) OBJ-D)
+              (jump! mv Opcodes/GOTO nxt)))
           (.visitLabel mv undeclared)))
       (aload! mv 6) (static! mv t "REMOVED" OBJ-D)
       (jump! mv Opcodes/IF_ACMPNE put-ext)
@@ -899,22 +1042,23 @@
       (if (zero? n)
         (do (aload! mv 1) (op! mv ret))
         (let [more (Label.)]
-          (op! mv Opcodes/ICONST_0)
-          (.visitVarInsn mv Opcodes/ISTORE 2)
-          (dotimes [i n] (unless-absent! mv t i #(.visitIincInsn mv 2 1)))
+          (present! mv 2)
           (.visitVarInsn mv Opcodes/ILOAD 2)
           (op! mv Opcodes/ICONST_1 Opcodes/ISHL)
           (.visitTypeInsn mv Opcodes/ANEWARRAY OBJ)
           (astore! mv 3)
           (op! mv Opcodes/ICONST_0)
           (.visitVarInsn mv Opcodes/ISTORE 4)
-          (dotimes [i n]
-            (unless-absent! mv t i
-                            (fn []
-                              (aload! mv 3) (.visitVarInsn mv Opcodes/ILOAD 4) (load-key mv t i) (op! mv Opcodes/AASTORE)
-                              (aload! mv 3) (.visitVarInsn mv Opcodes/ILOAD 4) (op! mv Opcodes/ICONST_1 Opcodes/IADD)
-                              (load-field mv t i) (op! mv Opcodes/AASTORE)
-                              (.visitIincInsn mv 4 2))))
+          (if (wide? n)
+            (doseq [[c [lo hi]] (map-indexed vector (chunks n))
+                    :let [part (str "fill$" c) desc (str "([" OBJ-D "I)I")
+                          cm (method cw priv part desc)]]
+              (fill! cm 1 2 lo hi)
+              (.visitVarInsn cm Opcodes/ILOAD 2) (op! cm Opcodes/IRETURN) (end! cm)
+              (aload! mv 0) (aload! mv 3) (.visitVarInsn mv Opcodes/ILOAD 4)
+              (.visitMethodInsn mv Opcodes/INVOKESPECIAL t part desc false)
+              (.visitVarInsn mv Opcodes/ISTORE 4))
+            (fill! mv 3 4 0 n))
           (aload! mv 3)
           (.visitMethodInsn mv Opcodes/INVOKESTATIC (iname RT) "mapUniqueKeys" (str "([Ljava/lang/Object;)" IPM-D) false)
           (astore! mv 5)
@@ -948,46 +1092,46 @@
       (end! mv))
     ;; reads: a declared key's field, else ext
     (let [mv (method cw pub "valAt" (mdesc clojure.lang.ILookup "valAt" Object))]
-      (by-key! mv t ks 1 (fn [i]
-                           (let [absent (Label.)]
-                             (load-field mv t i) (astore! mv 2) (aload! mv 2) (load-absent mv t)
-                             (jump! mv Opcodes/IF_ACMPEQ absent)
-                             (aload! mv 2) (op! mv ret)
-                             (.visitLabel mv absent)
-                             (op! mv Opcodes/ACONST_NULL ret))))
+      (by-field! mv t ks 1 3 (fn [load!]
+                               (let [absent (Label.)]
+                                 (load!) (astore! mv 2) (aload! mv 2) (load-absent mv t)
+                                 (jump! mv Opcodes/IF_ACMPEQ absent)
+                                 (aload! mv 2) (op! mv ret)
+                                 (.visitLabel mv absent)
+                                 (op! mv Opcodes/ACONST_NULL ret))))
       (load-ext mv t) (aload! mv 1) (invoke! mv clojure.lang.ILookup "valAt" Object) (op! mv ret)
       (end! mv))
     (let [mv (method cw pub "valAt" (mdesc clojure.lang.ILookup "valAt" Object Object))]
-      (by-key! mv t ks 1 (fn [i]
-                           (let [absent (Label.)]
-                             (load-field mv t i) (astore! mv 3) (aload! mv 3) (load-absent mv t)
-                             (jump! mv Opcodes/IF_ACMPEQ absent)
-                             (aload! mv 3) (op! mv ret)
-                             (.visitLabel mv absent)
-                             (aload! mv 2) (op! mv ret))))
+      (by-field! mv t ks 1 4 (fn [load!]
+                               (let [absent (Label.)]
+                                 (load!) (astore! mv 3) (aload! mv 3) (load-absent mv t)
+                                 (jump! mv Opcodes/IF_ACMPEQ absent)
+                                 (aload! mv 3) (op! mv ret)
+                                 (.visitLabel mv absent)
+                                 (aload! mv 2) (op! mv ret))))
       (load-ext mv t) (aload! mv 1) (aload! mv 2) (invoke! mv clojure.lang.ILookup "valAt" Object Object) (op! mv ret)
       (end! mv))
     (let [mv (method cw pub "containsKey" (mdesc clojure.lang.Associative "containsKey" Object))]
-      (by-key! mv t ks 1 (fn [i]
-                           (let [absent (Label.)]
-                             (load-field mv t i) (load-absent mv t)
-                             (jump! mv Opcodes/IF_ACMPEQ absent)
-                             (op! mv Opcodes/ICONST_1 Opcodes/IRETURN)
-                             (.visitLabel mv absent)
-                             (op! mv Opcodes/ICONST_0 Opcodes/IRETURN))))
+      (by-field! mv t ks 1 2 (fn [load!]
+                               (let [absent (Label.)]
+                                 (load!) (load-absent mv t)
+                                 (jump! mv Opcodes/IF_ACMPEQ absent)
+                                 (op! mv Opcodes/ICONST_1 Opcodes/IRETURN)
+                                 (.visitLabel mv absent)
+                                 (op! mv Opcodes/ICONST_0 Opcodes/IRETURN))))
       (load-ext mv t) (aload! mv 1) (invoke! mv clojure.lang.Associative "containsKey" Object) (op! mv Opcodes/IRETURN)
       (end! mv))
     (let [mv (method cw pub "entryAt" (mdesc clojure.lang.Associative "entryAt" Object))]
-      (by-key! mv t ks 1 (fn [i]
-                           (let [absent (Label.)]
-                             (load-field mv t i) (load-absent mv t)
-                             (jump! mv Opcodes/IF_ACMPEQ absent)
-                             (aload! mv 1) (load-field mv t i)
-                             (.visitMethodInsn mv Opcodes/INVOKESTATIC "clojure/lang/MapEntry" "create"
-                                               (str "(" OBJ-D OBJ-D ")Lclojure/lang/MapEntry;") false)
-                             (op! mv ret)
-                             (.visitLabel mv absent)
-                             (op! mv Opcodes/ACONST_NULL ret))))
+      (by-field! mv t ks 1 2 (fn [load!]
+                               (let [absent (Label.)]
+                                 (load!) (load-absent mv t)
+                                 (jump! mv Opcodes/IF_ACMPEQ absent)
+                                 (aload! mv 1) (load!)
+                                 (.visitMethodInsn mv Opcodes/INVOKESTATIC "clojure/lang/MapEntry" "create"
+                                                   (str "(" OBJ-D OBJ-D ")Lclojure/lang/MapEntry;") false)
+                                 (op! mv ret)
+                                 (.visitLabel mv absent)
+                                 (op! mv Opcodes/ACONST_NULL ret))))
       (load-ext mv t) (aload! mv 1) (invoke! mv clojure.lang.Associative "entryAt" Object) (op! mv ret)
       (end! mv))
     (let [mv (method cw pub "count" (mdesc clojure.lang.Counted "count"))]
@@ -1023,26 +1167,27 @@
         (jump! mv Opcodes/IF_ACMPNE changed)
         (aload! mv 0) (op! mv ret)
         (.visitLabel mv changed)
-        (static! mv t (str "G" i) IFN-D) (astore! mv 2)
-        (aload! mv 2) (jump! mv Opcodes/IFNULL unguarded)
-        (aload! mv 2) (aload! mv 0) (aload! mv 1)
-        (.visitMethodInsn mv Opcodes/INVOKEINTERFACE IFN "invoke" (str "(" OBJ-D OBJ-D ")" OBJ-D) true)
-        (op! mv Opcodes/POP)
-        ;; the count, one more where the field was absent
-        (aload! mv 0) (.visitFieldInsn mv Opcodes/GETFIELD t "cnt" "I")
-        (load-field mv t i) (load-absent mv t)
-        (jump! mv Opcodes/IF_ACMPNE was)
-        (op! mv Opcodes/ICONST_1 Opcodes/IADD)
-        (.visitLabel mv was)
-        (.visitVarInsn mv Opcodes/ISTORE 3)
-        (.visitTypeInsn mv Opcodes/NEW t) (op! mv Opcodes/DUP)
-        (aload! mv 0) (.visitFieldInsn mv Opcodes/GETFIELD t "_meta" IPM-D)
-        (load-ext mv t)
-        (.visitVarInsn mv Opcodes/ILOAD 3)
-        (dotimes [j n] (if (= i j) (aload! mv 1) (load-field mv t j)))
-        (.visitMethodInsn mv Opcodes/INVOKESPECIAL t "<init>" (flat-desc n) false)
-        (op! mv ret)
-        (.visitLabel mv unguarded)
+        (when-not unsealed?
+          (static! mv t (str "G" i) IFN-D) (astore! mv 2)
+          (aload! mv 2) (jump! mv Opcodes/IFNULL unguarded)
+          (aload! mv 2) (aload! mv 0) (aload! mv 1)
+          (.visitMethodInsn mv Opcodes/INVOKEINTERFACE IFN "invoke" (str "(" OBJ-D OBJ-D ")" OBJ-D) true)
+          (op! mv Opcodes/POP)
+          ;; the count, one more where the field was absent
+          (aload! mv 0) (.visitFieldInsn mv Opcodes/GETFIELD t "cnt" "I")
+          (load-field mv t i) (load-absent mv t)
+          (jump! mv Opcodes/IF_ACMPNE was)
+          (op! mv Opcodes/ICONST_1 Opcodes/IADD)
+          (.visitLabel mv was)
+          (.visitVarInsn mv Opcodes/ISTORE 3)
+          (.visitTypeInsn mv Opcodes/NEW t) (op! mv Opcodes/DUP)
+          (aload! mv 0) (.visitFieldInsn mv Opcodes/GETFIELD t "_meta" IPM-D)
+          (load-ext mv t)
+          (.visitVarInsn mv Opcodes/ILOAD 3)
+          (dotimes [j n] (if (= i j) (aload! mv 1) (load-field mv t j)))
+          (.visitMethodInsn mv Opcodes/INVOKESPECIAL t "<init>" (flat-desc n) false)
+          (op! mv ret)
+          (.visitLabel mv unguarded))
         (change! mv t 3 4 #(do (load-key mv t i) (aload! mv 1) 2))
         (load-entries mv t) (load-key mv t i) (aload! mv 1)
         (invoke! mv clojure.lang.IPersistentMap "assoc" Object Object)
@@ -1072,16 +1217,16 @@
     (let [mv (method cw pub "without" (mdesc clojure.lang.IPersistentMap "without" Object))
           write (Label.)]
       (change! mv t 5 6 #(do (aload! mv 1) (static! mv t "REMOVED" OBJ-D) 2))
-      (by-key! mv t ks 1 (fn [i]
-                           (let [present (Label.)]
-                             (load-field mv t i) (load-absent mv t)
-                             (jump! mv Opcodes/IF_ACMPNE present)
-                             (aload! mv 0) (op! mv ret)
-                             (.visitLabel mv present)
-                             (load-entries mv t) (aload! mv 1)
-                             (invoke! mv clojure.lang.IPersistentMap "without" Object)
-                             (astore! mv 2)
-                             (jump! mv Opcodes/GOTO write))))
+      (by-field! mv t ks 1 7 (fn [load!]
+                               (let [present (Label.)]
+                                 (load!) (load-absent mv t)
+                                 (jump! mv Opcodes/IF_ACMPNE present)
+                                 (aload! mv 0) (op! mv ret)
+                                 (.visitLabel mv present)
+                                 (load-entries mv t) (aload! mv 1)
+                                 (invoke! mv clojure.lang.IPersistentMap "without" Object)
+                                 (astore! mv 2)
+                                 (jump! mv Opcodes/GOTO write))))
       (load-ext mv t) (aload! mv 1)
       (invoke! mv clojure.lang.IPersistentMap "without" Object)
       (astore! mv 3)
@@ -1096,10 +1241,21 @@
       (write! mv t 2 4 #(do (aload! mv 1) (static! mv t "REMOVED" OBJ-D) 2))
       (end! mv))
     (let [mv (method cw pub "assocEx" (mdesc clojure.lang.IPersistentMap "assocEx" Object Object))]
-      (load-entries mv t) (aload! mv 1) (aload! mv 2)
-      (invoke! mv clojure.lang.IPersistentMap "assocEx" Object Object)
-      (astore! mv 3)
-      (write! mv t 3 4 (constantly 0))
+      (if unsealed?
+        ;; if (containsKey(k)) throw ...; return assoc(k, v);
+        (let [absent (Label.)]
+          (aload! mv 0) (aload! mv 1)
+          (.visitMethodInsn mv Opcodes/INVOKEVIRTUAL t "containsKey" (str "(" OBJ-D ")Z") false)
+          (jump! mv Opcodes/IFEQ absent)
+          (throw! mv RuntimeException "Key already present")
+          (.visitLabel mv absent)
+          (aload! mv 0) (aload! mv 1) (aload! mv 2)
+          (.visitMethodInsn mv Opcodes/INVOKEVIRTUAL t "assoc" (str "(" OBJ-D OBJ-D ")" IPM-D) false)
+          (op! mv ret))
+        (do (load-entries mv t) (aload! mv 1) (aload! mv 2)
+            (invoke! mv clojure.lang.IPersistentMap "assocEx" Object Object)
+            (astore! mv 3)
+            (write! mv t 3 4 (constantly 0))))
       (end! mv))
     (let [mv (method cw pub "cons" (mdesc clojure.lang.IPersistentMap "cons" Object))]
       (change! mv t 5 6 #(do (aload! mv 1) 1))
@@ -1177,6 +1333,10 @@
     (doto (method cw (bit-or pub stat) "create" (str "(" IPM-D ")" IPM-D))
       (aload! 0)
       (op! ret) (end!))
+    ;; public Object memory$() { return mem; }, of an unsealed T
+    (when unsealed?
+      (doto (method cw pub "memory$" (str "()" OBJ-D))
+        (aload! 0) (.visitFieldInsn Opcodes/GETFIELD t "mem" OBJ-D) (op! ret) (end!)))
     ;; the listed interfaces' methods, and toString where given
     (doseq [[i m] (map-indexed vector plan)] (forwarder! cw t i m))
     (.visitEnd cw)
@@ -1235,21 +1395,38 @@
     (throw (IllegalArgumentException. (str "a type's name is a symbol: " (pr-str type-name)))))
   (munge (.replace (str type-name) \/ \.)))
 
-(defonce ^:private own-drafts
+(defn- class-flags
+  "One flag per class, false until [[flag!]] sets it, kept on the class itself."
+  []
   (proxy [java.lang.ClassValue] []
     (computeValue [_] (java.util.concurrent.atomic.AtomicBoolean.))))
 
-(defn- own-draft!
-  "Records, on the class itself, that [[define]] made draft class `dc`."
-  [^Class dc]
-  (.set ^java.util.concurrent.atomic.AtomicBoolean (.get ^java.lang.ClassValue own-drafts dc) true))
+(defn- flag! [^java.lang.ClassValue flags ^Class c]
+  (.set ^java.util.concurrent.atomic.AtomicBoolean (.get flags c) true))
+
+(defn- flagged? [^java.lang.ClassValue flags ^Class c]
+  (.get ^java.util.concurrent.atomic.AtomicBoolean (.get flags c)))
+
+(defonce ^:private own-drafts
+  ;; the draft classes [[define]] made
+  (class-flags))
+
+(defonce ^:private own-unsealed
+  ;; the value classes of unsealed definitions [[define]] made
+  (class-flags))
 
 (defn- marked?
   "Whether `draft` is of a draft class [[define]] made and records `check` as passed."
   [draft check]
   (boolean (and (some? draft)
-                (.get ^java.util.concurrent.atomic.AtomicBoolean (.get ^java.lang.ClassValue own-drafts (class draft)))
+                (flagged? own-drafts (class draft))
                 (.test ^java.util.function.Predicate draft check))))
+
+(defn- memory
+  "The memory of `v`, a value of an unsealed definition's class [[define]] made; else nil."
+  [v]
+  (when (and (instance? recognitum.proof.Built v) (flagged? own-unsealed (class v)))
+    (.memory$ ^recognitum.proof.Built v)))
 
 (defn- refusal-of
   "A refusal of `kind`, whose message says `msg` of `x`, with `more` (`:method`, `:interfaces`)."
@@ -1283,7 +1460,7 @@
   "The [name parameter-types] of the methods T declares for itself, statics included."
   #{["claim" [(class (object-array 0)) Object]] ["install" [Object Object Object (class (object-array 0)) Object]] ["gate" []]
     ["create" [clojure.lang.IPersistentMap]] ["delta$" [Object Object]] ["index$" [Object]] ["plain" [Object]] ["withExt" [clojure.lang.IPersistentMap]]
-    ["writeReplace" []] ["getLookupThunk" [clojure.lang.Keyword]]
+    ["writeReplace" []] ["getLookupThunk" [clojure.lang.Keyword]] ["memory$" []]
     ["readObject" [java.io.ObjectInputStream]] ["meta" []] ["withMeta" [clojure.lang.IPersistentMap]]
     ["asTransient" []] ["valAt" [Object]] ["valAt" [Object Object]] ["containsKey" [Object]]
     ["entryAt" [Object]] ["count" []] ["seq" []] ["iterator" []] ["keyIterator" []] ["valIterator" []] ["assoc" [Object Object]]
@@ -1366,6 +1543,8 @@
       (refuse :malformed "the keys are distinct keywords" ks))
     (when (> (count ks) max-keys)
       (refuse :too-many-keys (str "a definition declares at most " max-keys " keys") (count ks))))
+  (when-not (contains? #{nil true false} (:unsealed definition))
+    (refuse :malformed ":unsealed is true or false" (:unsealed definition)))
   (doseq [^Class i interfaces
           :when (and (not= Object i) (some #(.isAssignableFrom i %) draft-interfaces))]
     (refuse :draft-interface "a draft implements this interface, and a draft implements none of its definition's" i
@@ -1598,12 +1777,80 @@
       ([old o] (guarded old (conj-change old o)))
       ([old k v] (guarded old (pair-change old k v))))))
 
+(defn- carry-fn
+  "CHG for the carry `carry` of an unsealed definition: as [[changes-fn]]'s, but where the
+  change is not empty it answers the pairs followed by what `(carry old changes)` returned,
+  which T's change takes as the new value's memory."
+  [^clojure.lang.IFn carry]
+  (let [carried (fn [old ^objects ch]
+                  (when ch
+                    (let [n (alength ch)
+                          a (java.util.Arrays/copyOf ch (unchecked-inc-int n))]
+                      (aset a n (.invoke carry old (clojure.lang.PersistentArrayMap. ch)))
+                      a)))]
+    (fn
+      ([old] (change-transient old))
+      ([old o] (carried old (conj-change old o)))
+      ([old k v] (carried old (pair-change old k v))))))
+
+(defn- mark-draft!
+  "Marks `check` on `draft`, a draft of the class `dc`, with `key`."
+  [^Class dc key draft check]
+  (when-not (.isInstance dc draft) (throw (IllegalArgumentException. "not a draft of this type")))
+  (.accept ^java.util.function.BiConsumer draft key check)
+  nil)
+
+(defn- draft-passed?
+  "Whether `draft` is a draft of the class `dc` that records `check`."
+  [^Class dc draft check]
+  (and (.isInstance dc draft) (.test ^java.util.function.Predicate draft check)))
+
+(defn- install-method
+  "The static install of the value class `vc`."
+  ^Method [^Class vc]
+  (.getMethod vc "install" (into-array Class [Object Object Object (class (object-array 0)) Object])))
+
+(defn- sealing!
+  "Refuses an op that seals or installs a write, on an unsealed definition."
+  []
+  (throw (IllegalStateException. "an unsealed definition seals nothing and takes no write")))
+
+(defn- unsealed-only!
+  "Refuses an op of an unsealed definition, on a definition that is not."
+  []
+  (throw (IllegalStateException. "only an unsealed definition builds a value or takes a carry")))
+
+(defn- unsealed-handle
+  "The handle of one emitted class pair of an unsealed definition: it builds values holding a
+  memory and proves none. Its write, never called, only marks the install done: with a carry
+  installed every change goes through CHG."
+  [^Class vc ^Class dc ^clojure.lang.IFn make key]
+  (let [draft-ctor (.getConstructor dc (make-array Class 0))
+        install    (install-method vc)]
+    (reify proof/Handle
+      (seal [_ _] (sealing!))
+      (build [_ m mem] (.invoke make key (proof/plain-map m) mem))
+      (proven? [_ _] false)
+      (install-write! [_ _] (sealing!))
+      (install-write! [_ _ _] (sealing!))
+      (install-write! [_ _ _ _] (sealing!))
+      (install-carry! [_ write carry]
+        (when-not (fn? carry)
+          (throw (IllegalArgumentException. "a carry is made by fn")))
+        (.invoke install nil (object-array [key (fn [& _] (sealing!)) (fn [a b c] (write a b c)) nil (carry-fn carry)]))
+        nil)
+      (open [_] (.newInstance draft-ctor (object-array 0)))
+      (mark! [_ draft check] (mark-draft! dc key draft check))
+      (passed? [_ draft check] (draft-passed? dc draft check))
+      (classes [_] [vc dc])
+      (capabilities [_] [key]))))
+
 (defn- handle
   "The handle of one emitted class pair, whose value class declares the keys `ks`. A reify,
   not a map: nothing walks into it."
   [^Class vc ^Class dc ^clojure.lang.IFn make key ks]
   (let [draft-ctor (.getConstructor dc (make-array Class 0))
-        install    (.getMethod vc "install" (into-array Class [Object Object Object (class (object-array 0)) Object]))
+        install    (install-method vc)
         gate       (.getMethod vc "gate" (make-array Class 0))
         ;; T's changes call the first function, always with the value itself as `old`.
         ;; `installed` hands the second to callers without the key, so a write through it
@@ -1642,6 +1889,7 @@
     (reify proof/Handle
       (seal [_ m]
         (.invoke make key (proof/plain-map m)))
+      (build [_ _ _] (unsealed-only!))
       (proven? [_ v] (.isInstance vc v))
       (install-write! [_ write] (install! write nil nil))
       (install-write! [_ write key-write] (install! write (guards! key-write) nil))
@@ -1649,13 +1897,10 @@
         (when-not (fn? change-guard)
           (throw (IllegalArgumentException. "a change guard is made by fn")))
         (install! write (guards! key-write) (changes-fn change-guard)))
+      (install-carry! [_ _ _] (unsealed-only!))
       (open [_] (.newInstance draft-ctor (object-array 0)))
-      (mark! [_ draft check]
-        (when-not (.isInstance dc draft) (throw (IllegalArgumentException. "not a draft of this type")))
-        (.accept ^java.util.function.BiConsumer draft key check)
-        nil)
-      (passed? [_ draft check]
-        (and (.isInstance dc draft) (.test ^java.util.function.Predicate draft check)))
+      (mark! [_ draft check] (mark-draft! dc key draft check))
+      (passed? [_ draft check] (draft-passed? dc draft check))
       (classes [_] [vc dc])
       (capabilities [_] [key]))))
 
@@ -1706,7 +1951,8 @@
           (refuse :reloaded-interface "the interface's name now names another class" i :interfaces [i])))
       (let [prefs (print-preferences ifaces)]
         (check-outranked prefs)
-        {:interfaces ifaces :plan plan :prefs prefs :keys (vec (:keys definition))}))
+        {:interfaces ifaces :plan plan :prefs prefs :keys (vec (:keys definition))
+         :unsealed (true? (:unsealed definition))}))
     (catch clojure.lang.ExceptionInfo e
       (if-let [r (::refusal (ex-data e))] {:refusal r} (throw e)))))
 
@@ -1728,25 +1974,28 @@
   with its message. The refusal is checked before T is defined, so it leaves no class under
   the type's name."
   [type-name definition]
-  (let [{ks :keys :keys [refusal interfaces plan prefs]} (analysis definition)
+  (let [{ks :keys :keys [refusal interfaces plan prefs unsealed]} (analysis definition)
         _      (when refusal (throw (ex-info (:message refusal) refusal)))
         ^String n (if type-name (class-name type-name) (fresh-name))
         t      (.replace n \. \/)
         d      (str t "$Draft")
         loader (DynamicClassLoader. (RT/baseLoader))
         _      (prefer-print-as-map! prefs)
-        vc     (.defineClass loader n (value-class-bytes t interfaces plan ks) nil)
+        vc     (.defineClass loader n (value-class-bytes t interfaces plan ks unsealed) nil)
+        _      (when unsealed (flag! own-unsealed vc))
         _      (dotimes [i (count ks)]
                  (.defineClass loader (.replace ^String (thunk-name t i) \/ \.) (thunk-bytes t i) nil))
         _      (.defineClass loader (.replace ^String (iter-name t) \/ \.) (iter-bytes t ks) nil)]
     (let [dc  (.defineClass loader (.replace d \/ \.) (draft-class-bytes d t) nil)
-          _   (own-draft! dc)
-          make (.newInstance (.getConstructor ^Class (.defineClass loader (str n "$New") (maker-bytes t) nil)
+          _   (flag! own-drafts dc)
+          make (.newInstance (.getConstructor ^Class (.defineClass loader (str n "$New") (maker-bytes t unsealed) nil)
                                               (make-array Class 0))
                              (object-array 0))
           key (.invoke (.getMethod ^Class vc "claim" (into-array Class [(class (object-array 0)) Object]))
                        nil (object-array [(object-array (map :f plan)) removed]))]
-      (handle vc dc make key ks))))
+      (if unsealed
+        (unsealed-handle vc dc make key)
+        (handle vc dc make key ks)))))
 
 (def strategy
   "Each `define-type` emits T and T$Draft into a new loader and claims T's key. The same
@@ -1760,4 +2009,5 @@
     (refusal [_ definition] (refusal definition))
     (class-name [_ type-name] (when type-name (class-name type-name)))
     (removed [_] removed)
-    (marked? [_ draft check] (marked? draft check))))
+    (marked? [_ draft check] (marked? draft check))
+    (memory [_ v] (memory v))))

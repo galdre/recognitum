@@ -4,10 +4,10 @@
    [clojure.edn :as edn]
    [clojure.test :refer [deftest is testing]]
    [recognitum.core :as rec]
-   [recognitum.heist :as h]
-   [recognitum.house :as house])
+   [demo.heist :as h]
+   [demo.house :as house])
   (:import
-   (recognitum.heist Heist)))
+   (demo.heist Heist)))
 
 (defn- err [f]
   (try (f) nil (catch clojure.lang.ExceptionInfo e (ex-data e))))
@@ -29,7 +29,7 @@
 (deftest map->T-throws-a-report-when-a-check-fails
   (let [e (err #(h/map->Heist (assoc entries ::h/take 2999)))]
     (is (= :recognitum/check-failed (:error e)))
-    (is (= 'recognitum.heist/Heist (:type e)))
+    (is (= 'demo.heist/Heist (:type e)))
     (is (= #{::h/cuts-sum-to-take} (set (keys (:failed e)))))
     (is (= {:data false :doc "the cuts add up to the take" :blocked #{::h/only-crew-get-cuts}}
            (::h/cuts-sum-to-take (:failed e))))
@@ -41,12 +41,12 @@
     (is (contains? (:failed (err #(h/->Heist "Job" #{"Charlie"} 10 {"Charlie" 10} nil))) ::h/getaway))))
 
 (deftest the-tagged-literal-runs-every-check
-  (let [readers {'recognitum.heist/Heist h/map->Heist}]
+  (let [readers {'demo.heist/Heist h/map->Heist}]
     (is (= job (edn/read-string {:readers readers} (pr-str job))) "prints as the tagged literal")
     (is (= job (edn/read-string {:readers (rec/data-readers)} (pr-str job))))
     (is (= :recognitum/check-failed
            (:error (err #(edn/read-string {:readers readers}
-                                          "#recognitum.heist/Heist {:recognitum.heist/name \"\"}")))))))
+                                          "#demo.heist/Heist {:demo.heist/name \"\"}")))))))
 
 (deftest no-path-skips-the-checks
   (testing "the class's constructor needs the type's key"

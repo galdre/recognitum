@@ -62,14 +62,15 @@
 
 ;; ------------------------------------------- shapes and concerns, by name
 
-(def ^:private input-mark "__rec_input__")
-(def ^:private check-mark "__rec_check__")
-(def ^:private inputs-unknown "__rec_inputs_unknown")
-(def ^:private concern-mark "__rec_concern")
+(def ^:private input-mark "--rec-input--")
+(def ^:private check-mark "--rec-check--")
+(def ^:private inputs-unknown "--rec-inputs-unknown")
+(def ^:private concern-mark "--rec-concern")
 
 (defonce ^{:doc "[ns name] -> {:inputs #{} :checks #{} :waits {}} for a bundle, with each
   check's waits among the bundle's checks; {:concern true} for a
-  concern, {:check true} for a bundle check; filled in this run."}
+  concern, {:check true} for a bundle check, {:checks-unknown true} for a copy written with no
+  map; filled in this run."}
   registry (atom {}))
 
 (defn- markers [bundle {:keys [inputs checks]}]
@@ -224,11 +225,28 @@
 
 ;; ----------------------------------------------------------- clause parse
 
-(defn- clause-parts [clause]
+(defn- clause-parts
+  "(name [waits] flags? \"doc\"? body...): flags, a keyword or a set of keywords written after
+  the waits with more forms after it, is the clause's concerns and :override."
+  [clause]
   (let [[nm waits & more] (:children clause)
-        body (if (and (api/string-node? (first more)) (next more)) (rest more) more)]
-    {:name nm :waits (when (= :vector (api/tag waits)) (:children waits))
-     :body body :meta (:meta clause)}))
+        flags (when (and (or (api/keyword-node? (first more)) (= :set (api/tag (first more)))) (next more))
+                (first more))
+        more (if flags (rest more) more)
+        doc (when (and (api/string-node? (first more)) (next more)) (first more))]
+    {:name nm :waits (when (= :vector (api/tag waits)) (:children waits)) :waits-node waits
+     :flags-node flags :flags (when flags (if (api/keyword-node? flags) [flags] (:children flags)))
+     :doc doc :body (if doc (rest more) more) :meta (:meta clause)}))
+
+(defn- def-of
+  "`(def nm doc nil)`, or `(def nm nil)` without a docstring."
+  [nm doc]
+  (if doc (lst (tok 'def) nm doc (tok nil)) (lst (tok 'def) nm (tok nil))))
+
+(defn- doc-split
+  "A defining form's children after its name as [docstring-or-nil the rest]."
+  [nodes]
+  (if (api/string-node? (first nodes)) [(first nodes) (rest nodes)] [nil nodes]))
 
 (defn- meta-entries
   "[key-node value-node] pairs of a node's reader metadata; ^:k gives [k nil]."
@@ -239,10 +257,10 @@
     [k v]))
 
 (defn- concern-usages
-  "^::c and ^::alias/c on a clause become usages of the concern var, at the
+  "::c and ::alias/c among a clause's flags become usages of the concern var, at the
   keyword. A keyword that names a var that no rec/defconcern defines is reported."
   [ns clause]
-  (for [[k _] (meta-entries clause) :when (:namespaced? k)
+  (for [k (:flags clause) :when (and (api/keyword-node? k) (:namespaced? k))
         :let [kw (:k k)
               node (at (symbol (namespace kw) (name kw)) k)
               target (if (namespace kw)
@@ -253,8 +271,50 @@
                     (str (api/sexpr node) " is not a concern: no rec/defconcern defines it")))
         node)))
 
+(def ^:private input-remedy
+  "an input clause takes no concern or :override; they go after a check's waits")
+
+(defn- misplaced-meta!
+  "Report metadata written on node, the place named: a clause, its name or waits, or a
+  section's head. The macros read none there, and refuse it. nm names the clause in the remedy;
+  with input? true, the clause binds a bundle's input."
+  [node place nm input?]
+  (when-let [ms (seq (:meta node))]
+    (let [k (some #(when (and (api/keyword-node? %)
+                              (or (:namespaced? %) (namespace (:k %)) (= :override (:k %))))
+                     %)
+                  ms)]
+      (finding! (first ms) :recognitum/misplaced-meta
+                (str (str/join " " (map #(str "^" %) ms)) " on " place ": "
+                     (if input?
+                       input-remedy
+                       (str "a clause takes no metadata; its concerns and :override go after its waits, as in ("
+                            nm " [waits] " (or k "::concern") " body)")))))))
+
+(defn- clause-flags!
+  "Report what the macros refuse in a clause's flags and metadata: metadata on the clause, its
+  name or its waits; a flag other than :override and a concern; and, for an input clause of
+  bundle, any flag."
+  ([c] (clause-flags! c nil))
+  ([{:keys [name waits-node flags flags-node] :as c} bundle]
+   (let [nm (api/sexpr name)
+         what (if bundle (str "input clause " nm " of " (api/sexpr bundle)) nm)
+         input? (some? bundle)]
+     (misplaced-meta! c (if bundle what (str "the clause " nm)) nm input?)
+     (misplaced-meta! name (str "the name of " what) nm input?)
+     (misplaced-meta! waits-node (str "the waits of " what) nm input?)
+     (if (and bundle flags-node)
+       (finding! flags-node :recognitum/clause-flag (str flags-node " on " what ": " input-remedy))
+       (doseq [f flags
+               :when (not (and (api/keyword-node? f)
+                               (or (:namespaced? f) (namespace (:k f)) (= :override (:k f)))))]
+         (finding! f :recognitum/clause-flag
+                   (if (api/keyword-node? f)
+                     (str "unknown flag " f " on " nm ": a clause's flags are :override and concerns")
+                     (str "a clause's flags are keywords: " f " on " nm))))))))
+
 (defn- override? [clause]
-  (some #(= :override (:k (first %))) (meta-entries clause)))
+  (some #(= :override (:k %)) (:flags clause)))
 
 (defn- sections
   "Split a defining form's tail into [{:bundle node :clauses [...]}... {:own [...]}]."
@@ -316,7 +376,7 @@
   (let [[_ nm doc] (:children node)]
     (swap! registry assoc [ns (sym nm)] {:concern true})
     {:node (apply lst (tok 'do)
-                  (lst (tok 'def) nm (or doc (tok nil)))
+                  (if (api/string-node? doc) (lst (tok 'def) nm doc (tok nil)) (lst (tok 'def) nm (or doc (tok nil))))
                   (marker-defs [(symbol (str (sym nm) concern-mark))]))}))
 
 (defn defcontext [{:keys [node]}]
@@ -324,13 +384,16 @@
 
 (defn- defcontext* [node]
   (let [[_ nm doc sel] (:children node)]
-    {:node (lst (tok 'def) nm (lst (tok 'do) doc sel))}))
+    {:node (if (and (api/string-node? doc) sel)
+             (lst (tok 'def) nm doc sel)
+             (lst (tok 'def) nm (apply lst (tok 'do) (remove nil? [doc sel]))))}))
 
 (defn defchecks [{:keys [node ns]}]
   (binding [*pin* (pin-of node)] {:node (defchecks* node ns)}))
 
 (defn- defchecks* [node ns]
-  (let [[_ nm inputs & tail] (:children node)
+  (let [[_ nm & more] (:children node)
+        [doc [inputs & tail]] (doc-split more)
         secs (sections tail)
         clauses (map clause-parts (mapcat :own secs))
         named (filter (comp sym :name) clauses)
@@ -342,12 +405,18 @@
     (swap! registry assoc [ns (sym nm)] shape)
     (doseq [c (:checks shape)] (swap! registry assoc [ns c] {:check true}))
     (doseq [c clauses] (doseq [b (:body c)] (check-body! b #{} false false)))
+    (doseq [c clauses] (clause-flags! c))
+    (doseq [c clauses :when (override? c)]
+      (finding! (some #(when (= :override (:k %)) %) (:flags c)) :recognitum/clause-flag
+                (str ":override on " (api/sexpr (:name c)) ": a bundle's check replaces no check; :override is for a"
+                     " clause of a type that replaces a check of a bound bundle")))
+    (doseq [t (keep :checks-token secs)] (misplaced-meta! t (str (api/sexpr t)) "name" false))
     (cycles! (for [c named] [(sym (:name c)) (:name c)]) (:waits shape) str)
     (apply lst (tok 'do)
-           (lst (tok 'def) nm (tok nil))
+           (def-of nm doc)
            (concat
             (marker-defs (markers (sym nm) shape))
-            (for [c clauses] (lst (tok 'def) (:name c) (tok nil)))
+            (for [c clauses] (def-of (:name c) (:doc c)))
             [(apply lst (tok 'do)
                     (concat (keep :checks-token secs)
                             (mapcat (partial concern-usages ns) clauses)
@@ -359,16 +428,18 @@
   (binding [*pin* (pin-of node)] (defcopy* node ns)))
 
 (defn- defcopy*
-  "(rec/defcopy new-name bundle {check new-check ...}). Each new name is written
-  in the source, so it navigates and renames as a var, and the copy needs no
+  "(rec/defcopy new-name \"doc\"? bundle {check new-check ...}). Each new name is
+  written in the source, so it navigates and renames as a var, and the copy needs no
   sight of the bundle to define its vars."
   [node ns]
-  (let [[_ nm bundle names & extra] (:children node)]
-    (if (or extra (not (api/map-node? names)))
-      (do (when-not (or extra (api/map-node? names))
-            (finding! (or names node) :recognitum/copy-form
-                      "rec/defcopy takes a map {check new-check ...} after the bundle"))
-          {:node (lst (tok 'do) (lst (tok 'def) nm (tok nil)) bundle)})
+  (let [[_ nm & more] (:children node)
+        [doc [bundle names & extra]] (doc-split more)]
+    (when (or extra (not (api/map-node? names)))
+      (finding! (if (api/map-node? names) (first extra) (or names node)) :recognitum/copy-form
+                "rec/defcopy takes a map {check new-check ...} after the bundle, and nothing after it"))
+    (if-not (api/map-node? names)
+      (do (swap! registry assoc [ns (sym nm)] {:checks-unknown true})
+          {:node (apply lst (tok 'do) (def-of nm doc) (when bundle [bundle]))})
       (let [shape (bundle-shape bundle)
             pairs (partition 2 (:children names))
             bns (some-> (sym bundle) namespace)
@@ -393,7 +464,7 @@
         (swap! registry assoc [ns (sym nm)] copy)
         (doseq [c (:checks copy)] (swap! registry assoc [ns c] {:check true}))
         {:node (apply lst (tok 'do)
-                      (lst (tok 'def) nm (tok nil))
+                      (def-of nm doc)
                       bundle
                       (concat
                        (marker-defs (markers (sym nm) copy))
@@ -506,6 +577,16 @@
                  :else [(conj out s) proto])))
            [[] nil] secs)))
 
+(defn- wait-use
+  "A wait as the code clj-kondo reads, or nil to leave it out: a qualified wait on a name this
+  run has not seen, in a namespace with a copy written with no map, may be a check of that
+  copy, which is unknown."
+  [w]
+  (let [{:keys [ns name] :as r} (when (qualified-symbol? (sym w)) (resolved w))]
+    (when-not (and r (not (get @registry [ns name]))
+                   (some (fn [[[n _] v]] (and (= n ns) (:checks-unknown v))) @registry))
+      w)))
+
 (defn- defproven* [node ns]
   (let [[_ T fields & tail] (:children node)
         field-nodes (:children fields)
@@ -566,9 +647,14 @@
                          (or (field-syms s) (resolved w)))]
         (finding! w :recognitum/unknown-wait
                   (str s " is not a check of this type"
-                       (when (:check (some->> (resolved w) ((juxt :ns :name)) (get @registry)))
-                         (str ": a bundle check is waited on as [bundle " s "]"))))))
+                       (when-let [{:keys [ns name]} (let [r (resolved w)]
+                                                      (when (:check (get @registry [(:ns r) (:name r)])) r))]
+                         (str ". A wait on a bundle's check is qualified: " (symbol (str ns) (str name))))))))
     (doseq [c clauses] (doseq [b (:body c)] (check-body! b required false false)))
+    (doseq [c clauses] (clause-flags! c))
+    (doseq [{:keys [bundle clauses]} bundles, c clauses] (clause-flags! (clause-parts c) bundle))
+    (doseq [t (concat (keep :checks-token secs) (keep :protocol all-secs))]
+      (misplaced-meta! t (str (api/sexpr t)) "name" false))
     (let [shape-check? #(contains? field-syms (sym (:name %)))
           invariants (remove shape-check? own-clauses)]
       ;; Fields are the outer scope. A shape check's name is a use of its field,
@@ -584,7 +670,7 @@
                                       (map (comp bare :bundle) bundles)
                                       (map :name (remove :reported overrides))
                                       (mapcat (partial concern-usages ns) clauses)
-                                      (map #(vct (:waits %)) clauses)
+                                      (map #(vct (keep wait-use (:waits %))) clauses)
                                       [(vct (map (comp fresh :name) invariants))]))]
                       when-extants
                       (map :name (filter shape-check? own-clauses))

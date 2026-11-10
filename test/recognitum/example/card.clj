@@ -32,10 +32,9 @@
     "an archived card is not edited"
     (or (not (rec/extant? stored-archived)) (not stored-archived)))
 
-  ^::perms/permission
-  (moves-only-where-allowed [perms/may-write perms/current-may-write]
-                            "a move needs write access to both collections"
-                            true)
+  (moves-only-where-allowed [perms/may-write perms/current-may-write] ::perms/permission
+    "a move needs write access to both collections"
+    true)
 
   (owner-active [perms/collection-exists]
     "the collection's owner is active"
@@ -48,8 +47,7 @@
   (collection-id [] collection-id)
   rec/checks
   (title [] (non-blank? title))
-  ^:override
-  (perms/may-write [perms/collection-exists]
-                   "dashboards also allow the collection's curators"
-                   (let [coll (rec/fetch db/collections collection-id)]
-                     (or (db/can-write? acting-user coll) (db/can-curate? acting-user coll)))))
+  (perms/may-write [perms/collection-exists] :override
+    "dashboards also allow the collection's curators"
+    (let [coll (rec/fetch db/collections collection-id)]
+      (or (db/can-write? acting-user coll) (db/can-curate? acting-user coll)))))

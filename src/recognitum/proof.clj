@@ -23,7 +23,11 @@
   - a definition's value class implements [[Proven]], an interface with no methods, so one
     entry in a multimethod such as `print-method` serves the values of every definition;
   - a value keeps its definition's methods after a redefinition;
-  - a value prints as its map: the text shows its data alone and never reads back proven.
+  - a value prints as its map: the text shows its data alone and never reads back proven;
+  - a definition may be unsealed: `proven?` is false of its values under every handle, none
+    of them is an instance of a sealed definition's value class, and its handle seals and
+    installs no write; with the key it builds values that hold a memory, which [[memory]]
+    reads without it, and installs a carry that every change of a value calls.
 
   Not guaranteed: that `with-meta` keeps proof. `seal` takes the meta of the map it seals,
   so a caller sets meta before sealing.
@@ -31,6 +35,9 @@
   This namespace is never reloaded: reloading it would orphan every handle.")
 
 (definterface Proven)
+
+(definterface Built
+  (^Object memory$ []))
 
 (defprotocol Strategy
   (define-type [strategy type-name] [strategy type-name definition]
@@ -45,6 +52,8 @@
     arguments. Of `Object`, `toString` may be given. An abstract method with no `f` throws
     when called; a default method with no `f` keeps its body; a draft implements none of
     the interfaces. Without a definition, the values implement no interface of their own.
+    `:unsealed true` makes the definition unsealed: its handle `build`s values and seals
+    none (see [[Handle]]); the rest of the definition means what it means without the flag.
     Where [[refusal]] answers a refusal of `definition`, throws `ex-info` with that refusal
     as its data and its `:message` as its message, and defines nothing.")
   (refusal [strategy definition]
@@ -59,7 +68,7 @@
     with the map's, by default bodies, return types or print entries (`:clash`), and more,
     under kinds of its own. Needs no key and defines nothing. The answer depends on
     `definition`, on the classes the listed interfaces' names load, and on the print
-    entries, as they are when called.")
+    entries, as they are when called. `:unsealed` changes no answer.")
   (class-name [strategy type-name]
     "The name of the class of the values of the type named `type-name`, a qualified symbol,
     the same under every definition of the type: `my.ns/T` -> `my.ns.T`. Nil for a nil
@@ -73,16 +82,27 @@
     "A function that calls the write installed on the definition whose values are of
     `value-class`, or nil when none is installed. It needs no key. Called with one or two
     arguments, it refuses an `old` that is not a value of that definition; called with three,
-    it passes them to the write as they are. It has no four-argument arity.")
+    it passes them to the write as they are. It has no four-argument arity. Of an unsealed
+    definition it has the three-argument arity alone.")
+  (memory [strategy v]
+    "The memory `v` was built or carried with, the very object, where `v` is a value of an
+    unsealed definition of this strategy; nil for anything else. Needs no key, and reads,
+    calls and changes nothing in the memory.")
   (removed [strategy]
     "The object the four-argument arity of an installed write gets as `v` where a `dissoc`
     removes `k`: one object for every type of the strategy, which no value holds."))
 
 (defprotocol Handle
   (seal [h m]
-    "A value of the type holding `m`'s entries and meta, proven under `h`.")
+    "A value of the type holding `m`'s entries and meta, proven under `h`. Throws, making
+    nothing, where `h` is unsealed.")
+  (build [h m mem]
+    "A value of the type holding `m`'s entries and meta and the memory `mem`, which no check
+    ran on and which is proven under no handle. Throws, making nothing, where `h` is not
+    unsealed.")
   (proven? [h v]
-    "Whether `v` is proven under `h`, the type's current definition.")
+    "Whether `v` is proven under `h`, the type's current definition. False under an unsealed
+    `h`.")
   (install-write! [h write] [h write key-write] [h write key-write change-guard]
     "Installs `write` as the write of every value of the type. Once per handle, with or
     without `key-write` and `change-guard`: a second call throws or does nothing. `write`
@@ -113,7 +133,18 @@
     returns, the change returns a value proven under `h` holding `old`'s entries with
     `changes` applied and `old`'s meta; where it throws, the throw propagates. `cg` answers
     as `write` would of `old` and those entries. Its cost is in proportion to the entries
-    the change names. Nothing reaches it through `installed`.")
+    the change names. Nothing reaches it through `installed`.
+
+    Throws, installing nothing, where `h` is unsealed.")
+  (install-carry! [h write carry]
+    "On an unsealed `h`, once, with no other install: `write`, of which `installed` reaches
+    the three-argument arity alone, and `carry`, `(carry old changes)`, made by `fn`.
+    `assoc`, `dissoc`, `conj`, `merge` and `into` (a transient's `persistent!`) of a value of
+    `h` call `(carry old changes)` once, `changes` the net change as a change guard is told
+    it. Where `changes` would be empty they call nothing and return `old`; where `carry`
+    returns `m`, the change returns a value of `h` holding `old`'s entries with `changes`
+    applied, `old`'s meta and the memory `m`; where it throws, the throw propagates. Throws,
+    installing nothing, where `h` is not unsealed, or a second time.")
   (open [h]
     "A new draft of the type, with no marks.")
   (mark! [h draft check]

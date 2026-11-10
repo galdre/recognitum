@@ -3,8 +3,11 @@
  :deps {org.clojure/clojure {:mvn/version "1.12.5"}}
 
  :aliases
- {;; The Heist demo.
-  ;;   clojure -M:dev -m recognitum.demo
+ {;; The demos and the walkthroughs.
+  ;;   clojure -M:dev -m demo.heist-run
+  ;;   clojure -M:dev -m demo.potion-run
+  ;;   clojure -M:dev -m demo.authz
+  ;;   clojure -M:dev -m demo.orders
   :dev {:extra-paths ["dev"]}
 
   ;; Prints a table: each row times an operation on a recognitum type and on a hand-written

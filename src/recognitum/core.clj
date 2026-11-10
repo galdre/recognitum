@@ -3,8 +3,14 @@
 
   [[defproven]] defines a type from its fields and named checks. Its constructors run every
   check or throw, and so does every write to one of its values, so holding a value of the type
-  is holding proof that the checks passed: `instance?` is the whole test. A **draft** is an
-  unchecked map of a type, for values built in steps; [[seal]] checks it and returns the value.
+  is holding proof that the checks passed: [[sealed?]] is the whole test, and `instance?` gives
+  the same answer until the type is redefined. A **draft** is an unchecked map of a type, for
+  values built in steps; [[seal]] checks it and returns the value.
+
+  [[defproven-in]] defines a type whose values are made and written without checks, and carry
+  in place the checks that passed on them: proof is asked with [[proves?]], never `instance?`.
+  A check that needs a held value's proof asks [[proves?]] too, since a [[defproven-in]] value
+  is an instance of its type's class without having passed its checks.
 
   The vocabulary:
 
@@ -24,11 +30,12 @@
 
   The public API:
 
-  - Define: [[defproven]], [[defchecks]], [[defcopy]], [[defconcern]], [[checks]].
+  - Define: [[defproven]], [[defproven-in]], [[defchecks]], [[defcopy]], [[defconcern]],
+    [[defcontext]], [[checks]].
   - Inside a check body: [[fetch]], [[fetch-each]], [[extant?]], [[when-extant]].
   - Build values: `map->T`, `->T` and the tagged literal `#ns/T {...}`, each generated per
     type; [[draft]], [[clean]], [[seal]], [[seal-all]], [[drafting]], [[drafting-all]].
-  - Run checks: [[check]], [[recheck]], [[check-all]].
+  - Run checks: [[check]], [[recheck]], [[check-all]], [[recheck-all]].
   - Ask: [[proves?]], [[proven-checks]], [[proven-concerns]], [[checks-of]], [[sealed?]],
     [[draft?]], [[data-readers]]."
   (:require
@@ -88,10 +95,11 @@
   A check waits on the shape check of each field its body reads, directly or through an
   input. A wait names any other check it waits on: an own check by its bare name, a bundle's
   check by its qualified var, or every check of a bundle by the bundle's qualified var, even
-  where the bundle is defined in this namespace. A clause marked `^::c` carries the concern
-  `c` that [[defconcern]] defined. A clause `^:override (bundle-ns/check [waits] body)`
+  where the bundle is defined in this namespace. A keyword or a set of keywords after the
+  waits, with more forms after it, is the clause's flags: `(c [waits] ::concern body)` carries
+  the concern that [[defconcern]] defined, and `(bundle-ns/check [waits] :override body)`
   replaces that check of a bound bundle, keeping its id, its concerns and its binding's
-  `:when-extant`.
+  `:when-extant`. Metadata on a clause, its name, its waits or a section's head is refused.
 
   After the checks sections come the type's own protocols and interfaces, mixed, written as
   in `defrecord`: a protocol or an interface, then its methods, each `(method [this args*]
@@ -123,32 +131,78 @@
   (define/defproven &env tname fields sections
     (assoc expansion :wiring `@(var wiring))))
 
-(defmacro defchecks
-  "Defines a bundle: a var holding checks over `inputs`, and one var per check.
+(defmacro defproven-in
+  "Defines the type `T` as [[defproven]] does, from the same form, except that nothing runs
+  its checks but a call that asks to: `map->T`, `->T` and the tagged literal check nothing, and
+  a write (`assoc`, `dissoc`, `merge`, `conj`, `into`) checks nothing. A key the type does not
+  declare is refused at the write, as on a [[defproven]] value.
 
-      (rec/defchecks collection-write [user collection-id]
+      (rec/defproven-in Card [title ^:optional due]
+        rec/checks
+        (title [] (string? title))
+        (due-later [] (rec/when-extant due (pos? due))))
+
+  A value carries, in place, the checks that passed on its entries, and every holder sees what
+  a run writes there: [[seal]], [[check]], [[recheck]], [[check-all]] and [[recheck-all]] run
+  checks on it and remember what passed and forget what failed. A write returns a new value
+  remembering what the old one passed, less the checks that read a key it changes; a write of
+  the very object a key holds changes nothing.
+
+  A value is never sealed: [[sealed?]] answers false, and code that needs proof asks
+  [[proves?]]. Every value implements the type's protocols and interfaces, whatever it has
+  passed. The type has no drafts: [[draft]], [[clean]] and [[drafting]] refuse its class and its
+  values. [[seal-all]] enters a value as it enters a draft, and [[drafting-all]] leaves it as it
+  is.
+
+  Evaluating the form again redefines `T`. A value of the earlier definition reads as before
+  and proves nothing; a write that changes it, a method other than `toString`, and every run of
+  checks on it throw, naming the current `map->T`."
+  {:arglists '([T [fields*] sections* method-sections*])
+   :style/indent [2 nil nil [:defn]]}
+  [tname fields & sections]
+  (define/defproven &env tname fields sections
+    (assoc expansion :wiring `@(var wiring) :unsealed true)))
+
+(defmacro defchecks
+  "Defines a bundle: a var holding checks over `inputs`, with the docstring `doc-string` if one
+  is given, and one var per check.
+
+      (rec/defchecks collection-write
+        \"The checks of a write to a collection.\"
+        [user collection-id]
         rec/checks
         (collection-exists [] (some? (rec/fetch db/collections collection-id)))
         (may-write [collection-exists] (db/can-write? user collection-id)))
 
-  Clauses are those of [[defproven]], with the inputs in place of fields. Each check's id is a
+  Clauses are those of [[defproven]], with the inputs in place of fields, and none takes
+  `:override`. Each check's id is a
   keyword in this namespace. Every input may be absent in a type that binds the bundle."
-  {:arglists '([name [inputs*] rec/checks clauses*])
-   :style/indent [2 nil nil [:defn]]}
-  [bname inputs marker & clauses]
-  (define/defchecks &env bname inputs marker clauses expansion))
+  {:arglists '([name doc-string? [inputs*] rec/checks clauses*])
+   :style/indent [:defn [:defn]]}
+  [bname & args]
+  (let [[doc inputs marker & clauses] (if (string? (first args)) args (cons nil args))]
+    (define/defchecks &env bname doc inputs marker clauses expansion)))
 
 (defmacro defcopy
   "Defines `new-name`, a copy of `bundle` whose checks are renamed by `names`, a map from each
-  check of the bundle to its new name, which names every check exactly once. The copy's ids
-  are keywords in this namespace; its checks keep their concerns."
-  {:style/indent 2}
-  [new-name bundle names]
-  (define/defcopy new-name bundle names))
+  check of the bundle to its new name, which names every check exactly once. The copy's var has
+  the docstring `doc-string` if one is given. The copy's ids are keywords in this namespace; its
+  checks keep their concerns and their docstrings."
+  {:arglists '([new-name doc-string? bundle names])
+   :style/indent :defn}
+  [new-name & args]
+  (define/defcopy new-name args))
+
+(defmacro defcontext
+  "Defines `name` as a context: a var holding the selection `sel`, with the docstring `doc`. A
+  context means nothing beyond its selection: every op given it answers as given `sel`."
+  {:style/indent :defn}
+  [name doc sel]
+  `(def ~(vary-meta name assoc :doc doc) ~sel))
 
 (defmacro defconcern
-  "Defines the concern `name`: a clause marked `^::name` carries it, and a selection names its
-  checks by the var or by the keyword `::name`."
+  "Defines the concern `name`: a clause with `::name` after its waits carries it, and a
+  selection names its checks by the var or by the keyword `::name`."
   {:style/indent 1}
   [name doc]
   (define/defconcern name doc))
@@ -222,7 +276,8 @@
 (defn draft
   "A draft: given a type's class, one holding nothing and passing nothing; given a sealed value,
   one holding its entries and passing every check; given a value of a definition that a later
-  one displaced, a draft of the later one holding its entries and passing nothing; given a
+  one displaced, a draft of the later one holding its entries and passing nothing, or a throw
+  saying the type has no current definition where its name no longer names one; given a
   draft, that draft. A draft is a map that accepts any write and remembers which checks pass
   on its entries; a write forgets the checks that read a key it writes."
   [x]
@@ -239,16 +294,26 @@
   passed, so the next seal runs only the rest. Throws ex-info whose `:error` is
   `:recognitum/undeclared-keys`, before any check runs, where `d` holds a key its type does
   not declare; `:recognitum/check-failed`, with the report of [[check]] under `:failed` and
-  `:blocked`; or `:recognitum/missing-fields`."
-  [d]
-  (record/seal d))
+  `:blocked`; or `:recognitum/missing-fields`.
+
+  With `sel`: a draft seals against every check, so `sel` is [[every]] or the seal throws,
+  running nothing. A value of a [[defproven-in]] type runs the checks `sel` selects, what they
+  wait on and the shape check of each field it must or does hold, less what it passed, and is
+  returned itself, remembering what passed; or the seal throws as above. After a seal that
+  returns, `(proves? v sel)` is true. Without `sel`, it is sealed against [[every]]."
+  ([d]
+   (record/seal d))
+  ([d sel]
+   (record/seal d sel)))
 
 (defn check
   "Runs the checks `sel` selects in `x`, and those they wait on, that `x` does not already pass;
   a draft remembers what passed and forgets what failed, and a sealed value runs nothing.
   Returns true, or a report: `{:failed {id {:data :doc :blocked}} :blocked #{id}}`, where
   `:blocked` under a failed check holds the checks its failure kept from running, and
-  `:pulled-back` explains each failed check that an [[except]] removed and a wait ran anyway."
+  `:pulled-back` explains each failed check that an [[except]] removed and a wait ran anyway.
+  Throws where `x` is a type's class, a type given where a value belongs, as do [[recheck]],
+  [[seal]], the batch operations and the others that take a value; [[proves?]] answers false."
   [x sel]
   (record/check x sel))
 
@@ -267,9 +332,19 @@
   [xs sel]
   (record/check-all xs sel))
 
+(defn recheck-all
+  "Runs what [[recheck]] would run on each value of `xs`, which may be of several types, in one
+  pass, so values that read the same source share its calls. Each draft and each value of a
+  [[defproven-in]] type remembers as under [[recheck]]; a sealed value stays as it is. Returns a
+  vector of what [[recheck]] returns, one per value, in order."
+  [xs sel]
+  (record/recheck-all xs sel))
+
 (defn seal-all
   "Seals every draft in `shape`, a value of plain data, all or nothing, and returns `shape`
-  with each draft replaced by its value.
+  with each draft replaced by its value. A value of a [[defproven-in]] type is sealed in place
+  against `sel` (against [[every]] without one), as [[seal]] seals it; drafts are sealed
+  against every check, whatever `sel` is.
 
   The walk enters maps, keys and values, as `clojure.walk` does; vectors, lists and sets by
   element; and the fields of every draft. A list stays a list; any other sequence, a lazy one
@@ -287,14 +362,25 @@
   draft in place, ready to mend at those paths and seal again. A path is what `get-in` takes,
   with an index for a list or sequence and a set's member for a set; a draft in key position
   ends its path with `:recognitum.core/key` after the key. A check body that throws makes `seal-all` throw
-  it."
-  [shape]
-  (record/seal-all shape ::key))
+  it.
+
+  The walk enters a [[defproven-in]] value's fields as a draft's, sealing what they hold first.
+  It comes back as the very value given unless the walk replaced a draft in it; then it comes
+  back as a new value, each field holding such a draft written as `assoc` writes it, so it
+  forgets the checks that read those fields, and is sealed. In `:drafts`, such a value holds
+  each draft back in its field. A value of a redefined type's earlier definition fails, with
+  the error `:recognitum/displaced`, and is given back in `:drafts` as it is."
+  ([shape]
+   (record/seal-all shape ::key))
+  ([shape sel]
+   (record/seal-all shape sel ::key)))
 
 (defn drafting-all
   "[[seal-all]] of `(f opened)`, where `opened` is `shape` walked as [[seal-all]] walks it,
   with each sealed value it reaches opened as a draft and each draft left as it is, neither
-  entered. `f` may return a different shape. Throws as [[seal-all]] does."
+  entered. `f` may return a different shape. Throws as [[seal-all]] does. A value of a
+  [[defproven-in]] type is neither opened, nor entered, nor sealed, as a string is not: it
+  comes back as `f` left it, a draft inside it unsealed."
   [shape f]
   (record/drafting-all shape f ::key))
 
@@ -307,13 +393,16 @@
 
 (defn proves?
   "Whether `x` passes the checks `sel` selects, those they wait on, and the shape check of each
-  field it must or does hold. True for every sealed value of a type's current definition."
+  field it must or does hold. True for every sealed value of a type's current definition; for
+  a draft or a value of a [[defproven-in]] type, a matter of what it remembers. False for a
+  value of a displaced definition, for a draft made before its type was defined again, and
+  for a type's class."
   [x sel]
   (record/proves? x sel))
 
 (defn proven-checks
-  "The ids of the checks `x` passes: all of its type's for a sealed value, those a draft
-  remembers."
+  "The ids of the checks `x` passes: all of its type's for a sealed value, those a draft or a
+  value of a [[defproven-in]] type remembers."
   [x]
   (record/proven-checks x))
 
@@ -328,7 +417,8 @@
   (record/checks-of sel x))
 
 (defn sealed?
-  "Whether `x` is a value of the current definition of a type."
+  "Whether `x` is a value of the current definition of a [[defproven]] type. False for every
+  value of a [[defproven-in]] type, whatever it has passed: proof is asked with [[proves?]]."
   [x]
   (record/sealed? x))
 

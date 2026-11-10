@@ -9,4 +9,4 @@
   (collection-id [] collection-id)
   rec/checks
   (moves [perms/collection-write] true)
-  ^:override (perms/may-write [moves] true))
+  (perms/may-write [moves] :override true))

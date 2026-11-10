@@ -1,14 +1,14 @@
-(ns recognitum.authz
+(ns demo.authz
   "Authorization as checks: a refund request whose value proves that the permission service
   allowed it. Each printed line is a form, then what it returned or the error it threw, then
   the calls the permission service received.
 
-      clojure -M:dev -m recognitum.authz"
+      clojure -M:dev -m demo.authz"
   (:require
    [clojure.string :as str]
    [recognitum.core :as rec]
-   [recognitum.permissions :as perms]
-   [recognitum.show :refer [show *logs*]]))
+   [demo.permissions :as perms]
+   [demo.show :refer [show *logs*]]))
 
 (rec/defconcern access "Checks that ask the permission service.")
 
@@ -21,15 +21,13 @@
   (amount   [] "the amount is a positive whole number of cents" (pos-int? amount))
   (note     [] "the note is text" (string? note))
 
-  ^::access
-  (may-refund []
-              "the actor holds the refund grant for the order"
-              (true? (rec/fetch perms/allowed [actor :refund order-id])))
+  (may-refund [] ::access
+    "the actor holds the refund grant for the order"
+    (true? (rec/fetch perms/allowed [actor :refund order-id])))
 
-  ^::access
-  (within-limit [may-refund]
-                "the amount is within the actor's refund limit"
-                (<= amount (or (rec/fetch perms/refund-limit actor) 0))))
+  (within-limit [may-refund] ::access
+    "the amount is within the actor's refund limit"
+    (<= amount (or (rec/fetch perms/refund-limit actor) 0))))
 
 (defn request->draft
   "A draft of a Refund from a request: the actor from the session, the rest from the form's

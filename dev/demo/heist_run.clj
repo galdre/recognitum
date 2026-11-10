@@ -1,15 +1,15 @@
-(ns recognitum.demo
+(ns demo.heist-run
   "The Heist example end to end. Each printed line is a form, then what it returned or the
   error it threw; the lines that read the house also print the calls it received.
 
-      clojure -M:dev -m recognitum.demo"
+      clojure -M:dev -m demo.heist-run"
   (:require
    [clojure.edn :as edn]
    [recognitum.core :as rec]
-   [recognitum.heist :as h]
-   [recognitum.house :as house])
+   [demo.heist :as h]
+   [demo.house :as house])
   (:import
-   (recognitum.heist Heist)))
+   (demo.heist Heist)))
 
 (defn- show* [label f]
   (reset! house/calls [])
@@ -37,7 +37,7 @@
   (show (h/map->Heist (assoc crew-of-three ::h/take 2999)))
   (show (h/->Heist "Job" #{"Charlie"} 10 {"Charlie" 10} "Handsome Rob"))
   (show (edn/read-string {:readers (rec/data-readers)}
-                         "#recognitum.heist/Heist {:recognitum.heist/name \"\" :recognitum.heist/crew #{\"Steve\"} :recognitum.heist/take 0 :recognitum.heist/cuts {}}"))
+                         "#demo.heist/Heist {:demo.heist/name \"\" :demo.heist/crew #{\"Steve\"} :demo.heist/take 0 :demo.heist/cuts {}}"))
 
   (println "-- a write reruns only the checks that read what it changed\n")
   (let [job h/italian-job]

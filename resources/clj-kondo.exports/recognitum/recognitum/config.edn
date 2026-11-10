@@ -1,7 +1,9 @@
 {:hooks {:analyze-call {recognitum.core/defproven    hooks.recognitum/defproven
+                        recognitum.core/defproven-in hooks.recognitum/defproven
                         recognitum.core/defchecks    hooks.recognitum/defchecks
                         recognitum.core/defcopy      hooks.recognitum/defcopy
                         recognitum.core/defconcern   hooks.recognitum/defconcern
+                        recognitum.core/defcontext   hooks.recognitum/defcontext
                         recognitum.core/fetch        hooks.recognitum/body-read
                         recognitum.core/fetch-each   hooks.recognitum/body-read
                         recognitum.core/extant?      hooks.recognitum/body-read
@@ -24,4 +26,6 @@
            :recognitum/when-extant-field    {:level :error}
            :recognitum/bound-twice          {:level :error}
            :recognitum/wait-cycle           {:level :error}
-           :recognitum/checks-after-protocol {:level :error}}}
+           :recognitum/checks-after-protocol {:level :error}
+           :recognitum/misplaced-meta       {:level :error}
+           :recognitum/clause-flag          {:level :error}}}

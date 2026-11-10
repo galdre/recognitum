@@ -17,7 +17,7 @@ checked.
 Add the library to `deps.edn` as a git dependency:
 
 ```clojure
-{:deps {io.github.galdre/recognitum {:git/tag "v0.1.1"}}}
+{:deps {io.github.galdre/recognitum {:git/tag "v0.2.0"}}}
 ```
 
 A git dependency also needs the sha of its commit. Run `clj -X:deps git-resolve-tags` once:
@@ -33,17 +33,23 @@ Report problems as issues at <https://github.com/galdre/recognitum/issues>.
 
 (rec/defproven Heist [name crew take cuts ^:optional getaway]
   rec/checks
-  (name    [] (non-blank? name))
-  (crew    [] (crew-set? crew))
-  (take    [] (non-neg-int? take))
-  (cuts    [] (cuts-map? cuts))
-  (getaway [] (string? getaway))
+  (name    [] "the job has a name" (non-blank? name))
+  (crew    [] "the crew is a set of names" (crew-set? crew))
+  (take    [] "the take is a whole number" (non-neg-int? take))
+  (cuts    [] "each cut is a whole number" (cuts-map? cuts))
+  (getaway [] "the getaway driver is named" (non-blank? getaway))
 
-  (cuts-sum-to-take [] "the cuts add up to the take" (sums-to take cuts))
-  (only-crew-get-cuts [cuts-sum-to-take] (every? crew (keys cuts)))
+  (cuts-sum-to-take []
+    "the cuts add up to the take"
+    (sums-to take cuts))
+  (only-crew-get-cuts [cuts-sum-to-take]
+    "only the crew gets a cut"
+    (every? crew (keys cuts)))
   (crew-vetted []
+    "the house has vetted everyone on the crew"
     (every? true? (vals (rec/fetch-each house/vetted crew))))
   (getaway-not-crew []
+    "the driver stays out of the vault"
     (rec/when-extant getaway (not (contains? crew getaway)))))
 ```
 
@@ -60,15 +66,18 @@ A field marked `^:optional` may be absent; every other field must be present. `-
 every field, and `nil` counts as present.
 
 Optional means absent, never `nil`. An optional field that holds `nil` is present, and its
-shape check runs on `nil`: `(string? getaway)` fails. A caller that means "no getaway", or
+shape check runs on `nil`: `(non-blank? getaway)` fails. A caller that means "no getaway", or
 "no change" in an update, leaves the key out.
 
-A runnable version of this example is in `dev/recognitum/heist.clj`, with a fake `house`
-source. `clojure -M:dev -m recognitum.demo` runs it end to end and prints each step.
+This example is `dev/demo/heist.clj`, in the namespace `demo.heist`, which also defines the
+plain predicates the checks call (`non-blank?`, `crew-set?` and the rest). `dev/demo/house.clj`
+is a fake `house` source. `clojure -M:dev -m demo.heist-run` runs the example end to end and
+prints each step.
 
 ## Checks
 
-A clause after `rec/checks` is `(name [waits] "doc"? body...)`.
+A clause after `rec/checks` is `(name [waits] flags? "doc"? body...)`. The flags are a
+concern or `:override`, described under Bundles.
 
 - A check passes when its body returns exactly `true`. Anything else it returns is its
   failure data.
@@ -128,8 +137,7 @@ many checks and values into fewer calls.
 ```clojure
 (map->Heist {::name "Job" ::crew #{"Charlie"} ::take 10 ::cuts {"Charlie" 9}})
 ;; ExceptionInfo: crew.heist/Heist failed 1 check
-;;   :crew.heist/cuts-sum-to-take (the cuts add up to the take): false,
-;;   which blocked :crew.heist/only-crew-get-cuts
+;;   :crew.heist/cuts-sum-to-take (the cuts add up to the take): false, which blocked :crew.heist/only-crew-get-cuts
 ```
 
 A value prints as a tagged literal, `#crew.heist/Heist {...}`. For `read` to accept it, add a
@@ -162,7 +170,11 @@ throws, `toString` excepted:
 
 `rec/draft` of an old value gives a draft of the new definition holding its entries, and
 `rec/seal` of that draft runs the new checks and returns a value of the new class. Reading an
-old value's printed form does the same, since the tag reads with the new `map->Heist`. A write
+old value's printed form does the same, since the tag reads with the new `map->Heist`. Where
+the name no longer names a definition of the type (the namespace unmapped it, or it now names
+a plain record), `rec/draft` of an old value throws, saying the type has no current
+definition. A draft opened before the redefinition still reads its entries, but proves
+nothing, whatever it remembered, and its seal throws. A write
 that changes nothing may return the old value unchanged, still not sealed: `assoc` of the
 identical value or `dissoc` of an absent key does, while `into` and `assoc` of an equal value
 that is not identical throw.
@@ -176,9 +188,10 @@ nothing: it throws, naming the current constructor.
 ;; and makes nothing. Call the current crew.heist/map->Heist
 ```
 
-Code compiled before the redefinition names the old class. There, `(instance? Heist x)` is true
-of an old value, which is not sealed; `rec/sealed?` answers false. A sink that may outlive a
-redefinition at the REPL asks `rec/sealed?`.
+Code that ran `(instance? Heist x)` before the redefinition still names the old class, so there
+it is true of an old value, which is not sealed. Code that first runs after the redefinition
+names the new class, even code compiled before it. `rec/sealed?` answers false for an old value
+wherever it is asked, so a sink that may outlive a redefinition at the REPL asks `rec/sealed?`.
 
 A definition that fails leaves nothing: where a check or a method does not compile, or a
 protocol or an interface is refused, the name reaches no class and no constructor, and an
@@ -195,8 +208,10 @@ write changes, and return a new value or throw. A write of several keys at once 
 checked on the result, so its order never matters:
 
 ```clojure
-(merge job {::take 3000 ::cuts {"Charlie" 1500 "Stella" 1500}})   ; checked once
-(assoc job ::getaway "Charlie")                                    ; throws: getaway-not-crew
+(merge job {::take 3000 ::cuts {"Charlie" 1500 "Stella" 1500}})   ; one write, checked once
+(assoc job ::getaway "Charlie")
+;; ExceptionInfo: crew.heist/Heist failed 1 check
+;;   :crew.heist/getaway-not-crew (the driver stays out of the vault): false
 ```
 
 Every type is closed: a value refuses a key its type does not declare. `empty` throws, since no
@@ -281,14 +296,15 @@ A **bundle** is a group of checks over named inputs, defined once and bound into
 
 (rec/defconcern permission "Checks on the acting user's rights.")
 
-(rec/defchecks collection-write [user collection-id]
+(rec/defchecks collection-write
+  "The checks of a write to a collection."
+  [user collection-id]
   rec/checks
   (collection-exists []
     "the collection is on file"
     (some? (rec/fetch db/collections collection-id)))
 
-  ^::permission
-  (may-write [collection-exists]
+  (may-write [collection-exists] ::permission
     "the acting user may write to the collection"
     (db/can-write? user (rec/fetch db/collections collection-id))))
 
@@ -297,11 +313,15 @@ A **bundle** is a group of checks over named inputs, defined once and bound into
    may-write         current-may-write})
 ```
 
-- `defchecks` defines the bundle var and one var per check: `perms/may-write`.
-- `defconcern` defines a concern. `^::permission` on a clause carries it; a concern that no
-  `defconcern` defines is refused.
+- `defchecks` defines the bundle var and one var per check: `perms/may-write`. A docstring
+  after the bundle's name is the bundle var's, and one after a check's waits is the check's.
+- `defconcern` defines a concern. A clause carries it when `::permission` follows the clause's
+  waits; several concerns are written as a set, `#{::permission ::audit}`. A keyword or set
+  alone after the waits is the body. A concern that no `defconcern` defines is refused, and so
+  is metadata on a clause, its name or its waits, which the macros do not read.
 - `defcopy` copies a bundle under new names. Its map names every check of the bundle exactly
-  once. The copy's ids are in the copying namespace, and its checks keep their concerns.
+  once. The copy's ids are in the copying namespace, and its checks keep their concerns and
+  docstrings. It takes a docstring after its name, as `defchecks` does.
 
 A type binds a bundle with the bundle's var followed by one `(input [] expression)` clause per
 input, each an expression of the type's fields:
@@ -320,8 +340,7 @@ input, each an expression of the type's fields:
 
   rec/checks
   (name [] (non-blank? name))
-  ^::perms/permission
-  (moves-only-where-allowed [perms/may-write perms/current-may-write] true))
+  (moves-only-where-allowed [perms/may-write perms/current-may-write] ::perms/permission true))
 ```
 
 - An input clause runs only when a check that reads its input runs, once for each such
@@ -341,9 +360,10 @@ input, each an expression of the type's fields:
   check of a bundle by the bundle's qualified var: `perms/may-write`, or `app.card/positives`
   for a bundle `positives` defined in the type's own namespace. A bare `positives` is read as
   an own check, and refused.
-- `^:override (perms/may-write [waits] body)` in `rec/checks` replaces that check of a bound
+- `(perms/may-write [waits] :override body)` in `rec/checks` replaces that check of a bound
   bundle with a body over the type's fields. It keeps the check's id and concerns, and its
-  binding's `:when-extant`.
+  binding's `:when-extant`. With concerns of its own, it is written in one set:
+  `#{:override ::audit}`.
 
 ## Protocols
 
@@ -434,11 +454,12 @@ bind.
 
 - `(rec/check-all xs sel)` runs what `rec/check` would run on each value of `xs`, which may be
   of several types, in one pass of the engine, so values that read the same source can share
-  its calls. Each draft remembers what passed and forgets what failed, as under `rec/check`,
-  so a later seal of each runs only the rest. It returns one answer per value, in order.
-- `(rec/proves? x sel)` is true for every value of a type's current definition; for a draft it
-  asks what the draft remembers, including the shape checks of every field it must or does
-  hold.
+  its calls. Each draft, and each value of a `rec/defproven-in` type, remembers what passed
+  and forgets what failed, as under `rec/check`, so a later seal of each runs only the rest. It
+  returns one answer per value, in order.
+- `(rec/proves? x sel)` is true for every sealed value of a type's current definition. For a
+  draft or a value of a `rec/defproven-in` type, it asks what `x` remembers, including the
+  shape checks of every field `x` must or does hold.
 - `(rec/proven-checks x)`, `(rec/proven-concerns x)` and `(rec/checks-of sel x-or-class)`
   return check ids and concern ids.
 
@@ -460,11 +481,221 @@ then explains, under `:pulled-back`, which check waited on it.
 Under each failed check, `:blocked` holds the checks its failure kept from running, directly or
 through another blocked check. A constructor, a write or a seal that fails throws `ex-info`
 whose data is this report with `:error :recognitum/check-failed` and `:type`. The other errors
-are `:recognitum/undeclared-keys` and `:recognitum/missing-fields`, each with the `:keys`.
+about a value's entries are `:recognitum/undeclared-keys` and `:recognitum/missing-fields`,
+each with the `:keys`.
 
 A missing required field fails each check that reads it with `{:absent key}`, its shape check
 included. `:recognitum/missing-fields` comes only when every check passes and no check read the
 missing field.
+
+## Values checked in parts
+
+A `rec/defproven` value passes every check wherever it is held. Some values are filled in over
+several steps, and different places ask different checks of them. `rec/defproven-in` defines a
+type for such values, from the same form as `rec/defproven`, except that nothing runs its checks
+but a call that asks to: `map->T`, `->T`, the tagged literal and every write check nothing. A
+key the type does not declare is still refused at the write.
+
+A draft is also filled in over steps, but it is sealed against every check, and its value then
+passes every check. A value of a `rec/defproven-in` type is checked against whatever
+selection its holder asks for, and proves the checks that passed on it.
+
+A value carries, in place, the checks that passed on its entries. `rec/check`, `rec/recheck`,
+`rec/check-all`, `rec/seal` and `rec/seal-all` run checks on it and record what passed, and
+every holder of the value sees the record. A write returns a new value that keeps the record,
+less the checks that read a key the write changes. A value of such a type is never sealed, and
+it is an instance of its class whatever it has passed, so code that needs proof asks
+`rec/proves?`. The type has no drafts: `rec/draft`, `rec/clean` and `rec/drafting` refuse it.
+
+The second example, `dev/demo/potion.clj`, is a potion that an apothecary brews, bottles and
+sells, and that the queen may send for. The concern `shop` marks what the shop asks of a potion,
+and `court` what the queen's court asks:
+
+```clojure
+(rec/defconcern shop "What the shop needs before it sells a potion.")
+(rec/defconcern court "What the court needs before the queen drinks a potion.")
+
+(rec/defproven-in Potion [name recipe ^:optional label ^:optional price ^:optional taster]
+  rec/checks
+  (name   [] "the potion has a name" (non-blank? name))
+  (recipe [] "the recipe maps each herb to its drams" (recipe? recipe))
+  (label  [] "the label is written" (non-blank? label))
+  (price  [] "the price is a whole number of pennies" (pos-int? price))
+  (taster [] "the taster is named" (non-blank? taster))
+
+  (labelled [] ::shop
+    "the label names every herb"
+    (every? #(str/includes? label %) (keys recipe)))
+  (priced [] ::shop
+    "the potion has a price"
+    (rec/extant? price))
+  (licensed [] ::shop
+    "the guild licenses every herb"
+    (every? true? (vals (rec/fetch-each guild/licensed (keys recipe)))))
+
+  (tasted [] ::court
+    "a taster drank it first"
+    (rec/extant? taster))
+  (fit-for-the-queen [] ::court
+    "it holds nothing the queen cannot abide"
+    (not-any? the-queen-cannot-abide (keys recipe))))
+```
+
+`the-queen-cannot-abide` is the set `#{"garlic" "mandrake root"}`, and `guild/licensed` is a
+source that answers, for each herb, whether the apothecaries' guild licenses it.
+
+A brewed potion has passed nothing. `rec/check` runs the checks a selection names, and the
+potion records what passed:
+
+```clojure
+(def brewed (map->Potion {::name "Draught of Courage"
+                          ::recipe {"dragon pepper" 2 "garlic" 1 "honey" 3}}))
+(rec/proves? brewed rec/shape)   ;; => false
+(rec/check brewed rec/shape)     ;; => true
+(rec/proves? brewed rec/shape)   ;; => true
+
+(def bottled (assoc brewed
+                    ::label "Draught of Courage: dragon pepper, garlic, honey"
+                    ::price 12))
+(rec/check bottled shop)         ;; => true
+(rec/proves? bottled shop)       ;; => true
+(rec/proves? bottled court)      ;; => false
+```
+
+A write forgets each check that reads a key it changes. The recipe's shape check, `labelled`
+and `licensed` read the recipe, so a new recipe forgets them, and the potion no longer passes
+the shop's checks:
+
+```clojure
+(def mended (assoc bottled ::recipe {"dragon pepper" 2 "moonwort" 1 "honey" 3}))
+(rec/proves? mended shop)        ;; => false
+(rec/proven-checks mended)       ;; => #{::name ::label ::price ::taster ::priced}
+(rec/proves? bottled shop)       ;; => true
+```
+
+The shape check of `taster` passed when `rec/shape` was checked, since an optional field's
+shape check passes where the field is absent.
+
+## Contexts
+
+`(rec/defcontext name doc sel)` defines a var that holds the selection `sel`. A context names
+the checks that one place asks of a value. It means nothing beyond its selection: every
+function that takes a selection takes a context, and answers as it answers for `sel`. The
+potion has two:
+
+```clojure
+(rec/defcontext on-the-shelf
+  "Sold in the shop: every check but the court's."
+  (rec/except rec/every court))
+
+(rec/defcontext at-court
+  "Served to the queen: every check but the shop's."
+  (rec/except rec/every shop))
+```
+
+Each place asks for the shape check of every field, and for its own concern's checks but
+not the other's.
+
+`(rec/seal v sel)` seals a value of a `rec/defproven-in` type against `sel`. It runs the checks
+`sel` selects that `v` has not passed, the checks they wait on, and the shape check of each
+field `v` must or does hold. It returns `v` itself, recording what passed, or throws as a
+constructor throws. After it returns, `(rec/proves? v sel)` is true. One potion can be fit for
+one place and not for the other:
+
+```clojure
+(identical? bottled (rec/seal bottled on-the-shelf))   ;; => true
+(rec/seal bottled at-court)
+;; ExceptionInfo: demo.potion/Potion failed 2 checks
+;;   :demo.potion/fit-for-the-queen (it holds nothing the queen cannot abide): false
+;;   :demo.potion/tasted (a taster drank it first): false
+
+(def served (assoc mended ::taster "Sir Gulp"))
+(identical? served (rec/seal served at-court))         ;; => true
+(rec/proves? served on-the-shelf)                      ;; => false
+(rec/check served on-the-shelf)
+;; => {:failed {::labelled {:data false :blocked #{} :doc "the label names every herb"}}
+;;     :blocked #{}}
+
+(def relabelled (assoc served ::label "Draught of Courage: dragon pepper, moonwort, honey"))
+(identical? relabelled (rec/seal relabelled on-the-shelf))   ;; => true
+(rec/proves? relabelled at-court)                            ;; => true
+```
+
+Writing the label forgot only the checks that read the label, so `relabelled` still passes the
+court's checks, and its seal on the shelf ran only `label` and `labelled`.
+
+- `(rec/seal v)` seals against `rec/every`.
+- A draft seals against every check: `(rec/seal d sel)` throws, running nothing, unless `sel`
+  is `rec/every`.
+- `(rec/seal-all shape sel)` seals each value of a `rec/defproven-in` type in `shape` in place
+  against `sel`, and each draft against every check. Without `sel`, it seals both against
+  every check. `rec/drafting-all` leaves such values as they are.
+- `rec/check-all` checks a batch against a context in one pass, so the potions share the
+  guild's calls: `(rec/check-all potions on-the-shelf)`.
+
+### Sinks and their gates
+
+A **sink** is a function whose effect depends on checks having passed: a sale, a write, a
+payment. Three things make a sink safe, and each has one home.
+
+- The **proof** lives in the value. `rec/proves?` says that the checks ran on exactly this
+  value; a plain map with the same entries proves nothing. A proof is a fact about the past, so
+  a sink asks it of the value it is handed, right before it acts.
+- The **gate** lives in the sink. Only the code that receives a value can refuse one without
+  proof. With contexts, proof is per context, so each sink names the context it needs.
+- **Coverage**, the assurance that every sink has its gate, lives in a test or a lint, since
+  neither a value nor a sink can see the rest of the code.
+
+In `demo.potion`, selling gates on the shop's context:
+
+```clojure
+(defn- gate
+  "Throws unless `potion` is proven against the context held by the var `context`."
+  [potion context sink]
+  (when-not (rec/proves? potion @context)
+    (throw (ex-info (str sink " takes only a potion proven " (:name (meta context)))
+                    {:error ::not-proven :sink sink :context (symbol context)}))))
+
+(defonce till (atom []))
+
+(defn ring-up!
+  "Records the sale of `potion` in the shop's till, and returns the receipt. Refuses a potion
+  not proven `on-the-shelf`."
+  [potion]
+  (gate potion #'on-the-shelf 'ring-up!)
+  (let [receipt {:sold (::name potion) :pennies (::price potion)}]
+    (swap! till conj receipt)
+    receipt))
+
+(defn sell!
+  "Sells `potion` over the counter. Refuses a potion not proven `on-the-shelf`."
+  [potion]
+  (gate potion #'on-the-shelf 'sell!)
+  (ring-up! potion))
+```
+
+The gate at the top of `sell!` is a signature gate, where a reader of the function looks first.
+The gate in `ring-up!` is an effect gate: the lowest-level write refuses an unproven potion,
+even from a caller that skipped `sell!`. A third place, a read gate, lets the fields out only
+through a check. The places are not exclusive. The court's sinks, `serve-to-the-queen!` and
+`pour-for-the-queen!`, gate on `at-court` in the same two places:
+
+```clojure
+(sell! {::name "Draught of Courage" ::recipe {"dragon pepper" 2 "garlic" 1 "honey" 3}})
+;; ExceptionInfo: sell! takes only a potion proven on-the-shelf
+(sell! relabelled)                ;; => {:sold "Draught of Courage" :pennies 12}
+(sell! (into {} relabelled))
+;; ExceptionInfo: sell! takes only a potion proven on-the-shelf
+(serve-to-the-queen! bottled)
+;; ExceptionInfo: serve-to-the-queen! takes only a potion proven at-court
+(pour-for-the-queen! bottled)
+;; ExceptionInfo: pour-for-the-queen! takes only a potion proven at-court
+(serve-to-the-queen! served)      ;; => "Draught of Courage"
+```
+
+`bottled` is proven on the shelf, so the court's gates refuse it. The demo's coverage is a test
+in `test/recognitum/demo_test.clj`: it hands every public function of `demo.potion` whose name
+ends in `!` a plain map and a potion that has passed nothing, and expects each to refuse both.
 
 ## Editor support
 
@@ -475,40 +706,38 @@ the body builds, the names the check engine reserves, incomplete `defcopy` maps,
 twice in one type, waits that form a cycle, and a checks section after a protocol. It lints
 method bodies as clj-kondo lints a `defrecord`'s. It reports nothing in a definition the macros
 accept, and may miss a mistake they refuse. The cycles it reports are those of the waits the
-forms list and the gates the bindings name; it does not read check bodies, so a cycle through
-a field a body reads is reported only by the macros, when the namespace loads. It sees one form
-at a time, so a cycle through the waits of a bundle defined in another namespace is also left
-to the macros.
+forms list and of the fields the bindings name in `:when-extant`; it does not read check
+bodies, so a cycle through a field a body reads is reported only by the macros, when the
+namespace loads. It sees one form at a time, so a cycle through the waits of a bundle defined
+in another namespace is also left to the macros.
 
 The configuration is on the classpath. To import it into a project, make the project's
 `.clj-kondo` directory and run `clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint`.
 
-The macros carry `:style/indent` metadata, which CIDER and clojure-lsp read to indent them as
-`defrecord` is indented (`clojure-lsp format` reads it with
-`--analysis '{:type :project-and-shallow-analysis}'`). With cljfmt alone, or Calva's formatter,
-add the same rules to `.cljfmt.edn`:
+The macros carry `:style/indent` metadata, which CIDER and clojure-lsp read to indent them
+(`clojure-lsp format` reads it with `--analysis '{:type :project-and-shallow-analysis}'`).
+`defproven` and `defproven-in` indent as `defrecord` does, the other definitions as `defn`
+does, and `when-extant` as `when` does. With cljfmt alone, or Calva's formatter, add the
+same rules to `.cljfmt.edn`:
 
 ```clojure
-{:extra-indents {recognitum.core/defproven   [[:block 2] [:inner 1]]
-                 recognitum.core/defchecks   [[:block 2] [:inner 1]]
-                 recognitum.core/defcopy     [[:block 2]]
-                 recognitum.core/defconcern  [[:block 1]]
-                 recognitum.core/when-extant [[:block 1]]}}
+{:extra-indents {recognitum.core/defproven    [[:block 2] [:inner 1]]
+                 recognitum.core/defproven-in [[:block 2] [:inner 1]]
+                 recognitum.core/defchecks    [[:inner 0] [:inner 1]]
+                 recognitum.core/defcopy      [[:inner 0]]
+                 recognitum.core/defconcern   [[:block 1]]
+                 recognitum.core/defcontext   [[:inner 0]]
+                 recognitum.core/when-extant  [[:block 1]]}}
 ```
-
-## Coming
-
-- `rec/defproven-in`: a type whose constructors check nothing, for values that pass only some
-  checks at a time, sealed against a selection.
-- `rec/defcontext`, a named selection, and `(rec/seal x selection)`.
 
 ## Running it
 
 ```
 clojure -X:test                     # the suite, including every file of test/corpus
-clojure -M:dev -m recognitum.demo   # the Heist, end to end
-clojure -M:dev -m recognitum.authz  # refund requests checked against a permission service
-clojure -M:dev -m recognitum.orders # orders: shapes, invariants, an address bundle bound twice
+clojure -M:dev -m demo.heist-run    # the Heist, end to end
+clojure -M:dev -m demo.potion-run   # the Potion, end to end
+clojure -M:dev -m demo.authz        # refund requests checked against a permission service
+clojure -M:dev -m demo.orders       # orders: shapes, invariants, an address bundle bound twice
 bb test/corpus/corpus_check.bb      # clj-kondo over the corpus, with the exported hook
 ```
 

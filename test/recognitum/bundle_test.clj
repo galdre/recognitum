@@ -62,7 +62,7 @@
                      (user [] acting-user)
                      (collection-id [] stored-collection-id)
                      rec/checks
-                     ^:override (perms/current-may-write [] false))))
+                     (perms/current-may-write [] :override false))))
         make @(ns-resolve 'recognitum.example.card 'map->Gated)]
     (is (instance? T (make {::card/id 1})) "skipped where the gate field is absent")
     (is (contains? (failed #(make {::card/id 1 ::card/stored-collection-id 1})) ::perms/current-may-write))))
@@ -155,17 +155,17 @@
 
 (deftest a-qualified-clause-replaces-a-bundle-check-only-when-marked
   (is (= (str "recognitum.bundle-test/x-positive is qualified:"
-              " mark it ^:override to replace that bundle check")
+              " write :override after its waits to replace that bundle check")
          (refusal '(rec/defproven Unmarked [a b]
                      positives (x [] a) (y [] b)
                      rec/checks (recognitum.bundle-test/x-positive [] true)))))
-  (is (= "^:override needs a qualified bundle check, got x-positive"
+  (is (= ":override needs a qualified bundle check, got x-positive"
          (refusal '(rec/defproven Plain [a b]
                      positives (x [] a) (y [] b)
-                     rec/checks ^:override (x-positive [] true)))))
+                     rec/checks (x-positive [] :override true)))))
   (is (nil? (refusal '(rec/defproven Marked [a b]
                         positives (x [] a) (y [] b)
-                        rec/checks ^:override (recognitum.bundle-test/x-positive [] true))))
+                        rec/checks (recognitum.bundle-test/x-positive [] :override true))))
       "marked, the override is accepted"))
 
 (deftest two-input-clauses-of-one-name-are-refused
@@ -173,3 +173,28 @@
          (refusal '(rec/defproven Twice [a b]
                      positives (x [] a) (x [] 1) (y [] b)
                      rec/checks (a [] true))))))
+
+(deftest a-bundle-takes-a-plain-name-and-a-vector-of-plain-inputs
+  (let [said (str "defchecks takes a name, a docstring if any, a vector of plain input symbols,"
+                  " rec/checks and clauses")]
+    (is (= said (refusal '(rec/defchecks some.ns/qualified [a] rec/checks (x [] a)))))
+    (is (= said (refusal '(rec/defchecks inputs-unplain [a 1] rec/checks (x [] a)))))
+    (is (= said (refusal '(rec/defchecks inputs-unvectored (a) rec/checks (x [] a)))))))
+
+(deftest a-bundle-checks-wait-names-a-check-of-its-bundle
+  (is (= "wait y of x is not a check of waits-wide. Its checks: x"
+         (refusal '(rec/defchecks waits-wide [a] rec/checks (x [y] a))))))
+
+(deftest a-copy-takes-a-map-of-plain-names
+  (let [said (str "defcopy takes a map from each check of perms/collection-write to its new name:"
+                  " {check new-name ...}")]
+    (is (= said (refusal '(rec/defcopy named-by-string perms/collection-write
+                            {collection-exists "c-exists" may-write c-may-write}))))
+    (is (= said (refusal '(rec/defcopy named-qualified perms/collection-write
+                            {collection-exists a/c-exists may-write c-may-write}))))))
+
+(deftest a-copy-redefines-no-check-of-another-bundle-here
+  (is (= "new name other-may-write would redefine recognitum.bundle-test/other-may-write"
+         (refusal '(rec/defcopy third-collection-write perms/collection-write
+                     {collection-exists third-collection-exists may-write other-may-write}))))
+  (is (= `other-collection-write (:bundle other-may-write)) "the other bundle's check is unchanged"))

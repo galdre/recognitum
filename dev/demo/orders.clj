@@ -1,13 +1,13 @@
-(ns recognitum.orders
+(ns demo.orders
   "An ordinary domain model: an order with lines, addresses and a discount, its fields' shapes,
   its invariants, and a bundle of address checks bound twice. Each printed line is a form, then
   what it returned or the error it threw.
 
-      clojure -M:dev -m recognitum.orders"
+      clojure -M:dev -m demo.orders"
   (:require
    [clojure.string :as str]
    [recognitum.core :as rec]
-   [recognitum.show :refer [show]]))
+   [demo.show :refer [show]]))
 
 (defn non-blank? [s] (and (string? s) (not (str/blank? s))))
 

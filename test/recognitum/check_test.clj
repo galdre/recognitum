@@ -7,10 +7,10 @@
    [recognitum.example.card :as card]
    [recognitum.example.db :as db]
    [recognitum.example.perms :as perms]
-   [recognitum.heist :as h])
+   [demo.heist :as h])
   (:import
    (recognitum.example.card Card Dashboard)
-   (recognitum.heist Heist)))
+   (demo.heist Heist)))
 
 (def row {::card/id 1 ::card/name "Plan" ::card/collection-id 1 ::card/archived false
           ::card/acting-user "ann"})
@@ -54,7 +54,7 @@
   (is (= ["recognitum.example.card/Card has no check :recognitum.example.card/nmae, and no concern or bundle check is named :recognitum.example.card/nmae"
           {:error :recognitum/unknown-name :name ::card/nmae :type 'recognitum.example.card/Card}]
          (refusal #(rec/checks-of ::card/nmae Card))))
-  (is (= 'recognitum.heist/Heist (:type (second (refusal #(rec/checks-of ::card/name Heist)))))
+  (is (= 'demo.heist/Heist (:type (second (refusal #(rec/checks-of ::card/name Heist)))))
       "another type's own check")
   (is (= 'recognitum.example.card/Dashboard
          (:type (second (refusal #(rec/checks-of (rec/union ::card/owner-active) Dashboard))))))

@@ -1,4 +1,4 @@
-(ns recognitum.show
+(ns demo.show
   "Prints a form, then what it returned or the error it threw, then the calls each logged
   source received while it ran.")
 

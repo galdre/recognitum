@@ -7,6 +7,8 @@
 ;;            the tool-neutral expectation; :kondo is clj-kondo's exact message.
 ;;            An entry with :tool :compiler is not expected from clj-kondo.
 ;;   :kondo   optional: overrides what clj-kondo is expected to report (as :report entries).
+;;   :docs    optional: {var docstring ...}, each var's docstring, under clj-kondo's analysis
+;;            and at run time.
 ;;   :cold    :same, or entries: what clj-kondo reports when the file is linted
 ;;            alone with a fresh cache that holds only recognitum.core.
 ;;
@@ -78,6 +80,33 @@
         got-warm (as-set (get warm f))]
     (compare! "warm" f want got-warm)
     (compare! "cold" f (if (= :same (:cold h)) want (expected (:cold h))) (as-set (cold f)))))
+
+(def var-definitions
+  "clj-kondo's analysis of the vars the corpus defines, the hook's own included."
+  (let [{:keys [out]} (shell {:dir root :out :string :continue true}
+                             "clj-kondo" "--cache" "false" "--config-dir" config-dir
+                             "--config" "{:analysis true :output {:format :edn}}"
+                             "--lint" "usage" "mistakes" "extra")]
+    (:var-definitions (:analysis (edn/read-string out)))))
+
+(doseq [f files
+        :let [want (:docs (header f))]
+        :when want]
+  (compare! "docs" f (set want)
+            (set (for [{:keys [name doc filename]} var-definitions
+                       :when (and (= f filename) (contains? want name))]
+                   [name doc]))))
+
+(def snake-vars
+  "The vars whose names hold an underscore: a kebab-case rule of a user's linter reports each."
+  (sort (set (for [{:keys [name]} var-definitions
+                   :when (str/includes? (str name) "_")]
+               name))))
+
+(if (empty? snake-vars)
+  (println "ok   kebab-case var names")
+  (do (swap! failures inc)
+      (println "FAIL kebab-case var names:" (str/join " " snake-vars))))
 
 (println (if (zero? @failures) "all files as expected" (str @failures " mismatches")))
 (System/exit (if (zero? @failures) 0 1))

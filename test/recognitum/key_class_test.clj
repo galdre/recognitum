@@ -748,22 +748,67 @@
           (is (= (count (g m)) (count r)))))
       (is (= (set (keys m)) (set (keys v)))))))
 
+(defn- sealing
+  "A type of `ks` whose write seals the whole new map, with no guards."
+  [ks]
+  (let [h (define {:keys ks})]
+    (proof/install-write! h (fn ([_ e] (proof/seal h e)) ([_ e _ _] (proof/seal h e))) (constantly nil))
+    h))
+
+(deftest a-wide-type-answers-as-its-map
+  ;; past 160 keys a type reads its fields by index and walks them in chunks; a reduce that
+  ;; stops in each chunk, and every read and change, answer as the plain map does
+  (doseq [n [160 161 200 250]
+          guarded? [false true]
+          :let [ks (mapv #(keyword "w" (str "k" %)) (range n))
+                h (if guarded? (change-guarded ks (atom [])) (sealing ks))]
+          m [(zipmap ks (range)) (assoc (zipmap (take-nth 3 ks) (range)) :x 1 "s" nil)]
+          :let [v (proof/seal h m)
+                ws (vec (seq v))]
+          k [(first ks) (ks 150) (peek ks) (ks (quot n 2)) :x :absent]]
+    (is (= m v))
+    (is (= (count m) (count v)))
+    (is (= [(get m k) (get m k ::none) (contains? m k) (find m k)]
+           [(get v k) (get v k ::none) (contains? v k) (find v k)]) (str n " keys: the reads of " k))
+    (doseq [[f r] [[#(dissoc % k) (dissoc v k)] [#(assoc % k :n) (assoc v k :n)]
+                   [#(merge % {k nil :y 2}) (merge v {k nil :y 2})]]]
+      (is (= (f m) r))
+      (is (= (count (f m)) (count r)))
+      (is (proof/proven? h r)))
+    (doseq [stop [0 1 (quot (count ws) 2) (dec (count ws)) (count ws)]
+            :let [calls (atom 0)
+                  step (fn [a e] (swap! calls inc) (if (= stop (count a)) (reduced a) (conj a e)))]]
+      (is (= (take stop ws)
+             (reduce step [] v)
+             (reduce-kv (fn [a kk vv] (step a [kk vv])) [] v)))
+      (is (= (* 2 (min (inc stop) (count ws))) @calls) "a reduced value ends the walk"))))
+
 (def ^:private jit-limit
   "HotSpot compiles no method of more bytecode than this (DontCompileHugeMethods)."
   8000)
 
 (deftest every-method-of-a-type-is-small-enough-to-compile
-  ;; the widths of the cost bench and past them; methods past jit-limit would run interpreted
+  ;; every width a definition may declare, sealed and unsealed, and every class it emits:
+  ;; methods past jit-limit would run interpreted. java.lang.classfile, which reads the
+  ;; classes, is in JDK 24 and later; on an older JDK this test passes trivially.
   (if-let [cf (try (Class/forName "java.lang.classfile.ClassFile") (catch ClassNotFoundException _ nil))]
-    (doseq [n [1 4 12 30 35 64 128 160]]
-      (let [bytes ((var-get #'key-class/value-class-bytes) "x/T" [] [] (mapv #(keyword (str "k" %)) (range n)))
-            parsed (clojure.lang.Reflector/invokeInstanceMethod
-                    (clojure.lang.Reflector/invokeStaticMethod cf "of" (object-array 0)) "parse" (object-array [bytes]))]
-        (doseq [m (.methods ^java.lang.classfile.ClassModel parsed)
-                :let [c (.orElse (.code ^java.lang.classfile.MethodModel m) nil)]
-                :when c]
-          (is (<= (alength (.codeArray ^java.lang.classfile.attribute.CodeAttribute c)) jit-limit)
-              (str n " keys: " (.stringValue (.methodName ^java.lang.classfile.MethodModel m)))))))
+    (let [parser (clojure.lang.Reflector/invokeStaticMethod cf "of" (object-array 0))
+          t "x/T"
+          over (for [n (range 0 251)
+                     :let [ks (mapv #(keyword (str "k" %)) (range n))]
+                     unsealed? [false true]
+                     bytes (concat [((var-get #'key-class/value-class-bytes) t [] [] ks unsealed?)
+                                    ((var-get #'key-class/iter-bytes) t ks)
+                                    ((var-get #'key-class/maker-bytes) t unsealed?)
+                                    ((var-get #'key-class/draft-class-bytes) (str t "$Draft") t)]
+                                   (map #((var-get #'key-class/thunk-bytes) t %) (range (min n 1))))
+                     :let [parsed (clojure.lang.Reflector/invokeInstanceMethod parser "parse" (object-array [bytes]))]
+                     m (.methods ^java.lang.classfile.ClassModel parsed)
+                     :let [c (.orElse (.code ^java.lang.classfile.MethodModel m) nil)]
+                     :when (and c (< jit-limit (alength (.codeArray ^java.lang.classfile.attribute.CodeAttribute c))))]
+                 [n unsealed? (.asInternalName (.thisClass ^java.lang.classfile.ClassModel parsed))
+                  (.stringValue (.methodName ^java.lang.classfile.MethodModel m))])]
+      (is (empty? (take 10 over)) "a width, sealed or not, a class and a method over the limit"))
     (is true "this JDK has no java.lang.classfile to read the class with")))
 
 (deftest the-assoc-of-a-declared-key-is-the-values-own
@@ -771,3 +816,138 @@
                                            {:keys [:a] :interfaces [recognitum.key_class_test.Assocs]
                                             :methods {'[assoc$0 1] (fn [_ _])}}))))
   (is (nil? (proof/refusal key-class/strategy {:keys [:a] :interfaces [Plain] :methods {'[show 0] (fn [_])}}))))
+
+;;; ------------------------------------------------------------------ unsealed definitions
+
+(definterface Remembers (memory$ []))
+
+(defn- carried
+  "An unsealed type of the keys `ks` with a carry installed that logs each change in `log`,
+  refuses one that sets `:b` to `:bad`, and answers `[:carried memory changes]`."
+  [type-name ks log]
+  (let [h (proof/define-type key-class/strategy type-name {:keys ks :unsealed true})]
+    (proof/install-carry! h (fn [op x y] [op x y])
+                          (fn [old ch]
+                            (swap! log conj (into {} ch))
+                            (when (= :bad (get ch :b)) (throw (ex-info "refused" {})))
+                            [:carried (proof/memory key-class/strategy old) (into {} ch)]))
+    h))
+
+(deftest an-unsealed-value-is-never-proven
+  (let [n   'recognitum.key-class-test/Unsealed
+        s1  (proof/define-type key-class/strategy n {:keys [:a]})
+        v1  (proof/seal s1 {:a 1})
+        u   (carried n [:a] (atom []))
+        b   (proof/build u {:a 1} :m)
+        s2  (proof/define-type key-class/strategy n {:keys [:a]})
+        v2  (proof/seal s2 {:a 1})
+        ws  [b (assoc b :a 2) (dissoc b :a) (conj b [:x 1]) (merge b {:a 3}) (into b {:a 4})
+             (persistent! (assoc! (transient b) :a 5)) (with-meta b {:m 1})]]
+    (doseq [w ws]
+      (is (= (class b) (class w)))
+      (is (not-any? #(proof/proven? % w) [s1 u s2]))
+      (is (not (instance? (class v1) w)))
+      (is (not (instance? (class v2) w))))
+    (is (not (proof/proven? u v1)) "a sealed value is not proven under an unsealed handle")
+    (is (proof/proven? s2 v2))
+    (is (= (proof/class-name key-class/strategy n) (.getName (class b))))))
+
+(deftest an-unsealed-definition-seals-nothing-and-a-sealed-one-builds-nothing
+  (let [u (proof/define-type key-class/strategy nil {:unsealed true})
+        s (proof/define-type key-class/strategy nil {})]
+    (doseq [f [#(proof/seal u {:a 1}) #(proof/install-write! u (fn [& _]))
+               #(proof/install-write! u (fn [& _]) (constantly nil))
+               #(proof/install-write! u (fn [& _]) (constantly nil) (fn [_ _]))
+               #(proof/build s {:a 1} :m) #(proof/install-carry! s (fn [& _]) (fn [_ _]))]]
+      (is (thrown? IllegalStateException (f))))
+    (is (nil? (proof/gate-of (first (proof/classes u)))) "a refused install installs nothing")
+    (is (nil? (proof/gate-of (first (proof/classes s)))))
+    (is (thrown? IllegalArgumentException (proof/install-carry! u (fn [& _]) {})) "a carry is made by fn")
+    (is (nil? (proof/gate-of (first (proof/classes u)))))
+    (proof/install-carry! u (fn [& _]) (fn [_ _]))
+    (is (thrown? java.lang.reflect.InvocationTargetException (proof/install-carry! u (fn [& _]) (fn [_ _])))
+        "one install per definition")))
+
+(deftest a-carry-is-told-the-net-change-and-gives-the-memory
+  (let [log (atom [])
+        h   (carried nil [:a :b] log)
+        r   (proof/removed key-class/strategy)
+        mem #(proof/memory key-class/strategy %)
+        v   (proof/build h (with-meta {:a 1 :x 2} {:m 1}) :m0)]
+    (doseq [[f ch] [[#(assoc % :a 5) {:a 5}] [#(assoc % :y 1) {:y 1}] [#(dissoc % :a) {:a r}] [#(dissoc % :x) {:x r}]
+                    [#(conj % [:b 2]) {:b 2}] [#(merge % {:a 1 :b 3}) {:b 3}] [#(into % {:x 4}) {:x 4}]
+                    [#(persistent! (-> (transient %) (assoc! :b 1) (dissoc! :b) (assoc! :q 1))) {:q 1}]
+                    [#(.assocEx ^clojure.lang.IPersistentMap % :b 6) {:b 6}]]]
+      (reset! log [])
+      (let [w (f v)]
+        (is (= [ch] @log))
+        (is (= [:carried :m0 ch] (mem w)))
+        (is (= {:m 1} (meta w)))
+        (is (= (reduce-kv (fn [m k x] (if (identical? x r) (dissoc m k) (assoc m k x))) {:a 1 :x 2} ch) w))))
+    (reset! log [])
+    (is (identical? v (assoc v :a 1)) "an empty change returns the value")
+    (is (identical? v (dissoc v :b)))
+    (is (identical? v (merge v {:x 2})))
+    (is (identical? v (persistent! (-> (transient v) (assoc! :b 1) (dissoc! :b)))))
+    (is (= [] @log) "and calls nothing")
+    (is (thrown-with-msg? RuntimeException #"Key already present" (.assocEx ^clojure.lang.IPersistentMap v :a 1)))
+    (is (thrown? clojure.lang.ExceptionInfo (assoc v :b :bad)) "the carry's throw propagates")
+    (reset! log [])
+    (let [w (with-meta v {:other 1})]
+      (is (= [{:other 1} :m0] [(meta w) (mem w)]) "with-meta keeps the memory")
+      (is (= [] @log) "and calls nothing"))))
+
+(deftest without-a-carry-a-change-of-a-built-value-is-a-plain-map
+  (let [h (proof/define-type key-class/strategy nil {:keys [:a] :unsealed true})
+        v (proof/build h {:a 1 :x 2} :m)]
+    (doseq [w [(assoc v :a 2) (assoc v :y 1) (dissoc v :a) (merge v {:b 1}) (into v {:b 1})
+               (persistent! (assoc! (transient v) :b 1))]]
+      (is (instance? clojure.lang.PersistentArrayMap w))
+      (is (nil? (proof/memory key-class/strategy w))))
+    (is (thrown? UnsupportedOperationException (empty v)))))
+
+(deftest memory-reads-only-a-value-of-an-unsealed-definition
+  (let [u   (proof/define-type key-class/strategy nil {:unsealed true})
+        s   (proof/define-type key-class/strategy nil {})
+        o   (Object.)
+        mem #(proof/memory key-class/strategy %)]
+    (is (identical? o (mem (proof/build u {:a 1} o))))
+    (is (nil? (mem (proof/build u {:a 1} nil))))
+    (doseq [x [(proof/seal s {:a 1}) (proof/open u) {:a 1} nil :x
+               (reify recognitum.proof.Built (memory$ [_] o))]]
+      (is (nil? (mem x))))))
+
+(deftest the-memory-method-is-the-values-own
+  (doseq [unsealed [false true]]
+    (is (= :map-method (:kind (proof/refusal key-class/strategy
+                                             {:unsealed unsealed :interfaces [recognitum.key_class_test.Remembers]
+                                              :methods {'[memory$ 0] (fn [_])}}))))))
+
+(deftest unsealed-is-true-or-false
+  (is (= :malformed (:kind (proof/refusal key-class/strategy {:unsealed :yes}))))
+  (is (some? (refusal {:unsealed 1})))
+  (doseq [u [nil true false]]
+    (is (nil? (proof/refusal key-class/strategy {:unsealed u})))))
+
+(deftest a-listed-built-interface-is-implemented-once
+  (doseq [unsealed [false true]
+          :let [h (proof/define-type key-class/strategy nil {:unsealed unsealed :interfaces [recognitum.proof.Built]})
+                v (if unsealed (proof/build h {:a 1} :m) (proof/seal h {:a 1}))]]
+    (is (instance? recognitum.proof.Built v))
+    (is (= (when unsealed :m) (proof/memory key-class/strategy v)) "only a value of an unsealed definition has a memory")))
+
+(deftest the-unsealed-shape-adds-no-keyless-way-in
+  (let [h  (carried nil [:a] (atom []))
+        v  (proof/build h {:a 1} :m)
+        c  (class v)
+        nc (Class/forName (str (.getName c) "$New") false (.getClassLoader c))]
+    (is (= [[Object Object Object]] (map #(vec (.getParameterTypes ^java.lang.reflect.Constructor %)) (.getConstructors c))))
+    (doseq [k [nil (Object.)]]
+      (is (thrown? SecurityException (clojure.lang.Reflector/invokeConstructor c (object-array [k {:a 2} :chosen]))))
+      (is (thrown? SecurityException (.invoke ^clojure.lang.IFn (.newInstance nc) k {:a 2} :chosen))))
+    (is (not-any? #(< 3 (count (.getParameterTypes ^java.lang.reflect.Constructor %))) (.getDeclaredConstructors c))
+        "no constructor takes every field: an unsealed value has no guards")
+    (let [g (proof/gate-of c)]
+      (is (= [:x 1 2] (g :x 1 2)) "the gate reaches the write's three-argument arity")
+      (is (thrown? clojure.lang.ArityException (g v {:a 2})) "and no other")
+      (is (thrown? clojure.lang.ArityException (g v))))))

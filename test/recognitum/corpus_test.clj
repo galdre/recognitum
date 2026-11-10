@@ -2,7 +2,8 @@
   "Loads every file of the corpus under `test/corpus` and holds the macros to the expectation in
   its header: a file that reports nothing loads; a file that reports a mistake fails to load
   with a message naming a token the header names, or, for a mistake the macros only warn
-  about, loads and prints a warning naming it."
+  about, loads and prints a warning naming it. A file whose header has `:docs` defines each var
+  it names with that docstring. A file of mistakes that only a linter reports is not loaded."
   (:require
    [clojure.edn :as edn]
    [clojure.java.io :as io]
@@ -14,6 +15,11 @@
 (def ^:private warned-only
   "The mistakes the macros report with a warning, and so load."
   #{"mistakes/m11a.clj" "mistakes/m11b.clj"})
+
+(def ^:private lint-only
+  "Files of mistakes at call sites, such as a call with the wrong number of arguments, that
+  only a linter reports: loading them would refuse nothing."
+  #{"extra/e01_selection_calls.clj"})
 
 (defn- header [text]
   (let [lines (take-while #(str/starts-with? % ";;") (str/split-lines text))
@@ -52,12 +58,17 @@
   (doseq [rel (corpus-files)
           :let [text (slurp (io/file root rel))
                 {:keys [report]} (header text)
-                tokens (map :names report)]]
+                tokens (map :names report)]
+          :when (not (lint-only rel))]
     (testing rel
       (let [{:keys [thrown err]} (load-text rel text)]
         (cond
           (empty? report)
-          (is (nil? thrown) (some-> thrown messages))
+          (do (is (nil? thrown) (some-> thrown messages))
+              (when-let [docs (:docs (header text))]
+                (let [ns-name (second (read-string text))]
+                  (is (= docs (into {} (for [s (keys docs)]
+                                         [s (:doc (meta (ns-resolve ns-name s)))])))))))
 
           (warned-only rel)
           (do (is (nil? thrown) (some-> thrown messages))
