@@ -29,7 +29,8 @@
          demo.show                                  #{}
          demo.permissions                           #{}
          demo.authz                                 #{recognitum.core demo.permissions demo.show}
-         demo.orders                                #{recognitum.core demo.show}
+         demo.catalogue                             #{}
+         demo.orders                                #{recognitum.core demo.catalogue demo.show}
          recognitum.example.db                      #{}
          recognitum.example.perms                   #{recognitum.core recognitum.example.db}
          recognitum.example.ballot                  #{recognitum.core recognitum.example.db recognitum.example.perms}
@@ -50,7 +51,7 @@
          recognitum.draft-test                      #{recognitum.core demo.heist demo.house recognitum.record}
          recognitum.engine-test                     #{recognitum.engine}
          recognitum.heist-test                      #{recognitum.core demo.heist demo.house}
-         recognitum.readme-test                     #{recognitum.core demo.guild demo.heist demo.potion}
+         recognitum.readme-test                     #{recognitum.core demo.authz demo.guild demo.heist demo.orders demo.permissions demo.potion}
          ;; asks the key-class strategy whether a type's checked write is installed
          recognitum.record-test                     #{recognitum.core recognitum.proof recognitum.proof.key-class}
          recognitum.key-class-test                  #{recognitum.proof recognitum.proof.key-class}
@@ -61,7 +62,8 @@
          recognitum.layers-test                     #{}
          recognitum.wide-test                       #{recognitum.core}
          recognitum.flag-place-test                 #{recognitum.core}
-         recognitum.walkthrough-test                #{demo.authz demo.orders}}
+         recognitum.walkthrough-test                #{demo.authz demo.orders}
+         recognitum.probe-test                      #{recognitum.core}}
 
  ;; dependencies the design forbids that the code still has, each to be removed from the code;
  ;; the check fails on any other violation, and on an entry here the code no longer has

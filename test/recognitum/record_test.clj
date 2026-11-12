@@ -76,31 +76,56 @@
   rec/checks
   (a [] (int? a)))
 
+(defn- absent [m]
+  (select-keys m [:error :failed :missing]))
+
+(defn- lacking [ks]
+  {:error :recognitum/check-failed :failed {} :missing ks})
+
 (deftest a-required-field-no-check-reads-must-still-be-present
   (is (instance? Unread (map->Unread {::a 1 ::b nil ::c nil})))
-  (is (= {:error :recognitum/missing-fields :keys #{::b}}
-         (select-keys (err #(map->Unread {::a 1 ::c nil})) [:error :keys])))
+  (is (= (lacking #{::b}) (absent (err #(map->Unread {::a 1 ::c nil})))))
   (testing "a draft that lacks one"
-    (is (= {:error :recognitum/missing-fields :keys #{::b}}
-           (select-keys (err #(rec/seal (into (rec/draft Unread) {::a 1 ::c nil}))) [:error :keys]))))
+    (is (= (lacking #{::b}) (absent (err #(rec/seal (into (rec/draft Unread) {::a 1 ::c nil})))))))
   (testing "one write that removes two fields, through a transient"
     (let [u (map->Unread {::a 1 ::b nil ::c nil})]
-      (is (= {:error :recognitum/missing-fields :keys #{::b ::c}}
-             (select-keys (err #(persistent! (-> (transient u) (dissoc! ::b) (dissoc! ::c)))) [:error :keys]))))))
+      (is (= (lacking #{::b ::c})
+             (absent (err #(persistent! (-> (transient u) (dissoc! ::b) (dissoc! ::c))))))))))
 
 (rec/defproven Bare [a ^:optional x]
   rec/checks
   (x [] (int? x)))
 
 (deftest a-required-field-is-refused-where-every-one-is-absent
-  (is (= {:error :recognitum/missing-fields :keys #{::a}}
-         (select-keys (err #(map->Bare {})) [:error :keys])))
-  (is (= {:error :recognitum/missing-fields :keys #{::a}}
-         (select-keys (err #(rec/seal (rec/draft Bare))) [:error :keys])))
+  (is (= (lacking #{::a}) (absent (err #(map->Bare {})))))
+  (is (= (lacking #{::a}) (absent (err #(rec/seal (rec/draft Bare))))))
   (testing "one write that removes it and adds as many keys as the value held"
-    (is (= {:error :recognitum/missing-fields :keys #{::a}}
-           (select-keys (err #(persistent! (-> (transient (map->Bare {::a 1})) (dissoc! ::a) (assoc! ::x 2))))
-                        [:error :keys])))))
+    (is (= (lacking #{::a})
+           (absent (err #(persistent! (-> (transient (map->Bare {::a 1})) (dissoc! ::a) (assoc! ::x 2)))))))))
+
+(deftest an-absent-field-and-a-failed-check-are-one-failure
+  (testing "the seal runs its checks whatever is absent, and names both"
+    (is (= {:error :recognitum/check-failed :failed {::a {:data false :blocked #{}}} :missing #{::b}}
+           (absent (err #(map->Unread {::a :x ::c nil})))))
+    (is (= {:error :recognitum/check-failed :failed {::x {:data false :blocked #{}}} :missing #{::a}}
+           (absent (err #(rec/seal (into (rec/draft Bare) {::x :y})))))))
+  (testing "the failure keeps its type, and carries :missing only where a field is absent"
+    (is (= 'recognitum.record-test/Unread (:type (err #(map->Unread {::a 1 ::c nil})))))
+    (is (not (contains? (err #(map->Unread {::a :x ::b 1 ::c 1})) :missing))))
+  (testing "a write to a sealed value that removes a field and fails a check"
+    (is (= {:error :recognitum/check-failed :failed {::x {:data false :blocked #{}}} :missing #{::a}}
+           (absent (err #(persistent! (-> (transient (map->Bare {::a 1})) (dissoc! ::a) (assoc! ::x :y))))))))
+  (testing "the message names the absent fields beside the failed checks"
+    (is (= "recognitum.record-test/Unread lacks the required field :recognitum.record-test/b"
+           (ex-message (try (map->Unread {::a 1 ::c nil}) (catch Exception e e)))))
+    (is (= (str "recognitum.record-test/Unread lacks the required fields :recognitum.record-test/b,"
+                " :recognitum.record-test/c")
+           (ex-message (try (rec/seal (into (rec/draft Unread) {::a 1})) (catch Exception e e)))))
+    (is (= (str "recognitum.record-test/Unread failed 1 check and lacks the required field"
+                " :recognitum.record-test/b\n  :recognitum.record-test/a: false")
+           (ex-message (try (map->Unread {::a :x ::c nil}) (catch Exception e e)))))
+    (is (= "recognitum.record-test/Unread failed 1 check\n  :recognitum.record-test/a: false"
+           (ex-message (try (map->Unread {::a :x ::b 1 ::c 1}) (catch Exception e e)))))))
 
 (rec/defproven Loose [^:optional x]
   rec/checks

@@ -10,6 +10,25 @@
    [recognitum.record :as record]
    [recognitum.select :as select]))
 
+;;; ------------------------------------------------------------------ reads of sources
+
+(defn- sourced-reads
+  "`form`, a body as `body/analyze` returns it, with the source of each `(&fetch src k)` and
+  `(&fetch-each src ks)` written as `(recognitum.record/sourced src)`, so that a probe's
+  overrides answer in the source's place. A quoted form is data and stays as it is."
+  [form]
+  (cond (seq? form)
+        (let [h (first form)
+              out (cond (= 'quote h) form
+                        (contains? '#{&fetch &fetch-each} h)
+                        (let [[_ src k] form]
+                          (list h (list `record/sourced (sourced-reads src)) (sourced-reads k)))
+                        :else (apply list (map sourced-reads form)))]
+          (if (and (meta form) (not (identical? out form))) (with-meta out (meta form)) out))
+        (map-entry? form) (mapv sourced-reads form)
+        (coll? form) (into (empty form) (map sourced-reads) form)
+        :else form))
+
 ;;; ------------------------------------------------------------------ names
 
 (defn- resolve-var [s] (try (let [v (resolve s)] (when (var? v) v)) (catch Exception _ nil)))
@@ -31,6 +50,13 @@
     (when-let [v (ns-resolve n (symbol (name k)))]
       (when (:recognitum/concern (meta v)) v))))
 
+(defn- symbol-concern
+  "The keyword of the concern symbol `s` names: the var it resolves to, where `rec/defconcern`
+  defined it. nil for a symbol that names no concern."
+  [s]
+  (when-let [v (resolve-var s)]
+    (when (:recognitum/concern (meta v)) (keyword (symbol v)))))
+
 (defn- words [xs] (str/join " " xs))
 
 ;;; ------------------------------------------------------------------ clauses
@@ -43,9 +69,11 @@
   (if (= (namespace k) (str *ns*)) (str "::" (name k)) (str k)))
 
 (defn- show-flags
-  "The flags `x`, a keyword or a set, as written in this namespace."
+  "The flags `x`, a keyword, a symbol or a set, as written in this namespace."
   [x]
-  (if (keyword? x) (show-flag x) (str "#{" (str/join " " (map #(if (keyword? %) (show-flag %) (pr-str %)) x)) "}")))
+  (cond (keyword? x) (show-flag x)
+        (set? x) (str "#{" (str/join " " (map #(if (keyword? %) (show-flag %) (pr-str %)) x)) "}")
+        :else (pr-str x)))
 
 (def ^:private input-remedy
   "an input clause takes no concern or :override; they go after a check's waits")
@@ -66,29 +94,43 @@
                         (str "a clause takes no metadata; its concerns and :override go after its waits, as in ("
                              nm " [waits] " (if k (show-flag k) "::concern") " body)")))))))
 
-(defn- flag-form? [x] (or (keyword? x) (set? x)))
-
 (defn- clause-flags
-  "The flags `x` written after the waits of clause `nm`, a keyword or a set of keywords, as a set:
-  `:override`, and concerns that [[defconcern]] defined."
+  "The flags `x` written after the waits of clause `nm`, a keyword, a symbol or a set of them, as
+  a set of keywords: `:override`, and concerns that [[defconcern]] defined. A symbol names the
+  concern whose var it resolves to."
   [ctx nm x]
-  (let [ks (if (set? x) x #{x})]
-    (doseq [k ks]
-      (cond (= :override k) nil
-            (qualified-keyword? k)
-            (when-not (concern-var k)
-              (fail! ctx (str (show-flag k) " on " nm " names no concern that rec/defconcern defines")))
-            (keyword? k)
-            (fail! ctx (str "unknown flag " k " on " nm ": a clause's flags are :override and concerns"))
-            :else
-            (fail! ctx (str "a clause's flags are keywords: " (show-flags x) " on " nm))))
-    ks))
+  (set (for [k (if (set? x) x #{x})]
+         (cond (= :override k) k
+               (qualified-keyword? k)
+               (if (concern-var k)
+                 k
+                 (fail! ctx (str (show-flag k) " on " nm " names no concern that rec/defconcern defines")))
+               (keyword? k)
+               (fail! ctx (str "unknown flag " k " on " nm ": a clause's flags are :override and concerns"))
+               (symbol? k)
+               (or (symbol-concern k)
+                   (fail! ctx (str k " on " nm " is not a concern: a symbol after a clause's waits names"
+                                   " a concern that rec/defconcern defines")))
+               :else
+               (fail! ctx (str "a clause's flags are keywords and concerns' symbols: " (show-flags x) " on " nm))))))
+
+(defn- flags-written
+  "The flags of a clause, the first of `more`, the forms after its waits, when more forms follow
+  it: a keyword or a set, or a symbol. An input clause takes no flags; a keyword, a set or a
+  symbol that names a concern there is returned, to be refused, and any other symbol is its
+  body."
+  [ctx more]
+  (let [x (first more)]
+    (when (and (next more)
+               (or (keyword? x) (set? x)
+                   (and (symbol? x) (or (not (:input-of ctx)) (symbol-concern x)))))
+      x)))
 
 (defn- parse-clause
-  "`(name [waits] flags? \"doc\"? body...)`, where `flags` is a keyword or a set of them: its
-  concerns and `:override`. A keyword or set alone after the waits is the body. Metadata on the
-  clause, its name or its waits is refused. With `:input-of` in `ctx`, the clause binds an input
-  of that bundle, and takes no flags."
+  "`(name [waits] flags? \"doc\"? body...)`, where `flags` is a keyword, a symbol or a set of
+  them: its concerns and `:override`. A flag followed by no other form is the body. Metadata on
+  the clause, its name or its waits is refused. With `:input-of` in `ctx`, the clause binds an
+  input of that bundle, and takes no flags."
   [ctx clause]
   (let [ctx (assoc ctx :line (:line (meta clause)))]
     (when-not (and (seq? clause) (symbol? (first clause)) (vector? (second clause)))
@@ -98,7 +140,7 @@
           _ (refuse-meta! ctx (if (:input-of ctx) what (str "the clause " nm)) clause nm)
           _ (refuse-meta! ctx (str "the name of " what) nm nm)
           _ (refuse-meta! ctx (str "the waits of " what) waits nm)
-          written (when (and (flag-form? (first more)) (next more)) (first more))
+          written (flags-written ctx more)
           _ (when (and written (:input-of ctx))
               (fail! ctx (str (show-flags written) " on " what ": " input-remedy)))
           flags (if written (clause-flags ctx nm written) #{})
@@ -185,7 +227,7 @@
                                                                ". Its checks: " (words (sort names)))))))
                             {:keys [form reads sources fetches?]} (body/analyze cctx body)]]
                   (assoc c :id (id-of name) :waits wait-ids :input-reads reads
-                         :sources sources :fetches? fetches? :run (compile-body form))))
+                         :sources sources :fetches? fetches? :run (compile-body (sourced-reads form)))))
         _ (topo-check! ctx (map :id cs) (into {} (map (juxt :id :waits)) cs))]
     `(do
        (def ~(named bname doc)
@@ -574,7 +616,7 @@
      :shape-of (when (and (simple-symbol? name) (fsyms name)) (key-of name))
      :reads (cond-> (set (map key-of reads)) gate (conj gate))
      :sources sources :fetches? fetches?
-     :run (compile-body form)}))
+     :run (compile-body (sourced-reads form))}))
 
 (defn- emit-factories
   [tname fields kind-doc t key-of]

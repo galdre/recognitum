@@ -48,10 +48,48 @@
     (throw (ex-info "not a sealed Refund" {:value r})))
   (str "refunded " (::amount r) " cents on order " (::order-id r) " for " (::actor r)))
 
+(defn under-limit
+  "What each of `refunds`, maps of a Refund's fields, would answer if `user`'s refund limit
+  were `cents`: true or a report. The service's limits are not changed, and no other reader of
+  the service sees `cents`."
+  [refunds user cents]
+  (rec/probe-all Refund refunds rec/every
+                 ;; For this call only, the checks that read `perms/refund-limit` get this
+                 ;; function's answer: the service's own, with the one limit replaced.
+                 {perms/refund-limit
+                  (fn [users] (merge (perms/refund-limit users) (select-keys {user cents} users)))}))
+
+(defn valid-on-the-day
+  "What each of `refunds`, maps of a Refund's fields as the refunds table stores them, answers
+  under the grants and limits of an earlier day: true or a report. `snapshot` holds that day's
+  `:grants`, a set of `[user action order-id]`, and `:limits`, a map from user to cents."
+  [refunds {:keys [grants limits]}]
+  (rec/probe-all Refund refunds rec/every
+                 ;; Both sources are answered from the snapshot, in the shape the service
+                 ;; answers in, so the service is not called at all.
+                 {perms/allowed      (fn [ks] (into {} (map (fn [k] [k (contains? grants k)])) ks))
+                  perms/refund-limit (fn [users] (select-keys limits users))}))
+
 (defn- request [user params] {:session {:user user} :params params})
 
 (def ^:private dana-refunds-1500
   (request "dana" {"order" "42" "amount" "1500" "note" "damaged in transit"}))
+
+(def ^:private held
+  "Refunds that wait for a supervisor."
+  [{::actor "eli" ::order-id 42 ::amount 2500}
+   {::actor "eli" ::order-id 42 ::amount 900}
+   {::actor "eli" ::order-id 41 ::amount 2500}])
+
+(def ^:private refunds-table
+  "Refunds issued last month, as their rows are stored."
+  [{::actor "dana" ::order-id 42 ::amount 1500}
+   {::actor "eli" ::order-id 41 ::amount 300}])
+
+(def ^:private last-month
+  "The grants and the limits as they stood when those refunds were issued."
+  {:grants #{["dana" :refund 41] ["dana" :refund 42] ["eli" :refund 42]}
+   :limits {"dana" 5000 "eli" 1000}})
 
 (defn -main [& _]
   (perms/restore!)
@@ -84,4 +122,15 @@
       (show (rec/check r access))
       (show (perms/revoke! "dana" :refund 42))
       (show (rec/recheck r access))
-      (show (rec/seal (rec/draft r))))))
+      (show (rec/seal (rec/draft r))))
+
+    (println "-- an audit: dana's grant is gone today; was last month's refund valid when issued?\n")
+    (show (mapv true? (rec/probe-all Refund refunds-table)))
+    (show (mapv true? (valid-on-the-day refunds-table last-month)))
+    (perms/restore!)
+
+    (println "-- before a limit changes: which held refunds would pass under it, the service unchanged\n")
+    (show (mapv true? (rec/probe-all Refund held)))
+    (show (mapv true? (under-limit held "eli" 3000)))
+    (show (mapv true? (under-limit held "eli" 500)))
+    (show (mapv true? (rec/probe-all Refund held)))))

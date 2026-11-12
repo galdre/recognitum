@@ -17,7 +17,7 @@ checked.
 Add the library to `deps.edn` as a git dependency:
 
 ```clojure
-{:deps {io.github.galdre/recognitum {:git/tag "v0.2.0"}}}
+{:deps {io.github.galdre/recognitum {:git/tag "v0.3.0"}}}
 ```
 
 A git dependency also needs the sha of its commit. Run `clj -X:deps git-resolve-tags` once:
@@ -237,6 +237,17 @@ including keys the type does not declare, and remembers which checks pass on its
 - `(rec/check d sel)` runs the selected checks, and what they wait on, that `d` does not
   remember, and remembers the result. `(rec/recheck d sel)` runs the selected checks even if
   `d` remembers them; use it when a source's answer may have changed.
+- A required field's presence is a check of its own, part of the field's shape, with no name.
+  A selection selects it as any shape check that reads only that field and no source:
+  `rec/every`, `rec/shape` and `rec/pure` select every field's, `(rec/reading ::f)` selects
+  `f`'s, and a check or a concern selects none. `rec/union` and `rec/except` combine these as
+  they combine checks, so `(rec/except rec/every (rec/reading ::b))` keeps every presence
+  check but `b`'s. Every check waits on the presence checks of the required fields it reads,
+  without being kept from running by them; a selection asks a field's presence where it
+  selects its presence check or a check that waits on it. `rec/check`
+  and `rec/recheck` report the asked fields `d` lacks under `:missing`, and answer a report,
+  never `true`, while it lacks any. `rec/proves?` is false for every selection while a
+  required field is absent.
 
 The memory cannot be forged: marks are tied to the entries they were set for and can be set
 only by the type's own checked code.
@@ -286,6 +297,265 @@ on its own, and inside `rec/drafting-all` leaves the seal to it:
 (rec/drafting-all [job-1 job-2] #(mapv (fn [j] (rename j "Again")) %))   ; sealed once, together
 ```
 
+A value of a definition that a later one displaced proves nothing. `rec/seal-all` reports it
+at its path with `:error :recognitum/displaced` and gives it back in `:drafts` as it is.
+`rec/drafting-all` opens it as `rec/draft` does, as a draft of the current definition; where
+its type's name names no definition any more, it leaves it as it is, and the seal reports it.
+
+### Asking without building
+
+A type's rules are written once, in its checks, and a constructor asks them and answers with
+a value or a throw. Code also needs their answer where no value can be built: for input still
+being corrected, incomplete data, a batch not yet written, or the world after a change that
+has not happened. Such code usually gets its own copy of the rules, and the copy drifts from
+the type.
+
+`(rec/probe T fields)` asks the checks of `T` about a plain map. It builds nothing, and
+answers `true` or a report; `rec/probe-all` asks about many maps in one pass. Web and API
+backends, importers, admin tools that preview a change, and audit jobs want it. A codebase
+whose checks read a database or a service wants it most, because a probe can have those reads
+answered from elsewhere, for that probe alone.
+
+#### Asking the rules as they stand
+
+**Everything wrong with a form.** A backend takes a form or an API request and must tell the
+caller every mistake in one response. Written with the constructor in a `try`, the handler
+reports one kind of mistake at a time: a constructor that meets a key the type does not have
+throws for that key and runs no check, so the caller mends the misspelt field, submits again,
+and only then hears of the field left out and the rule broken. A draft and `rec/check` run the
+checks but say nothing of the key, so the handler compares keys by hand. The usual third
+course is a validator beside the type, which is the second copy of the rules. A probe's
+report holds the absent fields, the keys the type does not have and the failed checks
+together, each check with its docstring:
+
+```clojure
+(defn form-errors
+  "What to tell the person who filled in the form, before anything is built: one message for
+  each field left out, each key a Heist does not have, and each check the entries fail. Nil
+  where `fields` would make a Heist."
+  [fields]
+  ;; The probe runs every check of Heist on the plain map and builds nothing. It answers true,
+  ;; or a report of everything wrong with the map.
+  (let [answer (rec/probe Heist fields)]
+    (when-not (true? answer)
+      (let [{:keys [missing undeclared failed]} answer]
+        (-> []
+            ;; :missing holds the required fields the map lacks.
+            (into (map #(str (name %) " is required")) (sort missing))
+            ;; :undeclared holds the keys a Heist does not have, such as a misspelt field.
+            (into (map #(str (name %) " is not a field of a heist")) (sort undeclared))
+            ;; :failed maps each failed check to its failure, whose :doc is the check's own
+            ;; docstring: the rule, in the words of the Heist's definition. A check that
+            ;; failed because it read an absent field is left out, since the field is
+            ;; already reported as required.
+            (into (for [[_ {:keys [doc data]}] (sort-by key failed)
+                        :when (not (:absent data))]
+                    (str "check failed: " doc))))))))
+```
+
+```clojure
+(form-errors {::name "Job" ::crew #{"Charlie" "Steve"} ::cuts {"Charlie" 9} ::gettaway "Rob"})
+;; => ["take is required" "gettaway is not a field of a heist" "check failed: the house has vetted everyone on the crew"]
+```
+
+**A dry run of an import.** `demo.orders` has an `Order` whose check `skus-listed` asks a
+catalogue whether it lists each line's sku. An importer takes a sheet of orders and must
+either import all of it or name every bad row, before it writes the first. Built row by row
+in a `try`, the import asks the catalogue once per row, and a row with a misspelt column
+reports that column and none of its other faults. `rec/seal-all` over a draft per row shares
+the catalogue's calls, but it also reports only the column for such a row, and it answers by
+throwing. A probe
+of the rows asks the catalogue once for the sheet and reports each row's faults together:
+
+```clojure
+(defn- problems
+  "The rows that would not make an Order, from the answers of a probe of the rows: a map from
+  each such row's number to the fields it lacks, the keys an Order does not have, and the
+  checks that fail on it."
+  [answers]
+  (into (sorted-map)
+        (keep-indexed
+         (fn [i answer]
+           ;; An answer is true, or a report of everything wrong with its row.
+           (when-not (true? answer)
+             [(inc i)
+              ;; :missing and :undeclared are kept as they are. Of :failed, each check's
+              ;; docstring is kept, less the checks that failed because they read an absent
+              ;; field, which :missing already names.
+              (let [failed (into (sorted-map)
+                                 (for [[id {:keys [doc data]}] (:failed answer)
+                                       :when (not (:absent data))]
+                                   [id doc]))]
+                (cond-> (select-keys answer [:missing :undeclared])
+                  (seq failed) (assoc :failed failed)))])))
+        answers))
+
+(defn import-problems
+  "A dry run of an import: what is wrong with each of `rows`, maps of an Order's fields as a
+  sheet's parser gives them. Empty where every row would import."
+  [rows]
+  ;; One run over every row: the rows' reads of the catalogue go out as one call, and no
+  ;; Order is built.
+  (problems (rec/probe-all Order rows)))
+```
+
+```clojure
+(import-problems
+ [{::id 11 ::customer "Ada" ::lines [{:sku "tea" :qty 2 :price 450}] ::shipping address}
+  {::id 13 ::customer "Edsger" ::lines [{:sku "samovar" :qty 1 :price 9900}] ::shipping address
+   ::dicsount 500}
+  {::id 14 ::lines [{:sku "kettle" :qty 1 :price 3500}]
+   ::shipping {:street "5 Hauptstr." :postcode "1011" :country "DE"}}])
+;; => {2 {:undeclared #{::dicsount}
+;;        :failed {::skus-listed "the catalogue lists every sku"}}
+;;     3 {:missing #{::customer}
+;;        :failed {::postcode-fits-country "the postcode has its country's form"}}}
+```
+
+#### Asking the rules of a world that is not the current one
+
+A check that reads a source judges the data against the world as the source reports it now.
+Some questions are about another world: the one after this transaction commits, the one after
+a setting changes, the one of last month. A codebase has three ways to ask them without a
+probe, each with a cost:
+
+- `with-redefs` on the source replaces it for every thread. In a running server, every
+  request checked meanwhile is judged against the imagined world, and a draft checked under
+  it remembers the pass and later seals without asking the real source.
+- A parameter that says which world to read, passed to every source. A check takes no
+  argument but its type's fields, so the parameter becomes a field of every type, or a
+  dynamic var that every source has to read.
+- A second copy of the rules, written against the other world. The copy drifts from the type.
+
+The fourth argument of a probe maps a source to a function that answers in its place, for
+that call only. The checks are the type's own, no other reader of the source sees the
+function, and nothing remembers the answer.
+
+**Rows that are not committed yet.** An upload adds new products and the orders for them, and
+must be written in one transaction or not at all. The catalogue cannot see the new products
+until the transaction commits, so every order for a new product fails `skus-listed`, though
+the upload as a whole is sound. The codebase either gives up the transaction (products first,
+then orders, with a clean-up when an order is bad) or skips the check for uploads. The
+override asks the orders against the catalogue as it will stand after the commit: the
+catalogue's own answer, and `true` for each product the upload adds. Once the dry run finds no
+problem, the products are written and the orders are built by the constructor, which then
+reads the catalogue itself:
+
+```clojure
+(defn upload-problems
+  "A dry run of an upload that adds the products `new-skus` and the orders `rows` in one
+  transaction. The catalogue does not list the new products until the transaction commits, so
+  the rows are asked against the catalogue as it will stand then."
+  [new-skus rows]
+  (problems
+   (rec/probe-all Order rows rec/every
+                  ;; For this call only, `skus-listed` reads this function in place of the
+                  ;; catalogue: the catalogue's own answer, and true for each product the
+                  ;; upload adds.
+                  {catalogue/listed
+                   (fn [skus] (merge (catalogue/listed skus)
+                                     (zipmap (filter (set new-skus) skus) (repeat true))))})))
+```
+
+```clojure
+(upload-problems #{"samovar"}
+                 [{::id 13 ::customer "Edsger" ::lines [{:sku "samovar" :qty 1 :price 9900}]
+                   ::shipping address}
+                  {::id 15 ::customer "Ada" ::lines [{:sku "urn" :qty 1 :price 7000}]
+                   ::shipping address}])
+;; => {2 {:failed {::skus-listed "the catalogue lists every sku"}}}
+```
+
+**A setting about to change.** `demo.authz` has a `Refund` with the fields `actor`, `order-id`
+and `amount`. Its checks ask a permission service whether the actor holds the grant for the
+order, and whether the amount is within the actor's refund limit. An admin screen sets each
+clerk's refund limit. Before a supervisor saves a new limit, the screen shows which refunds
+now held for approval would pass under it, or, where the limit is lowered, which would stop
+passing. The limit is not saved yet, and must not affect the refunds that other requests are
+checking in the meantime. The override answers with the service's limits, except that the one
+limit is replaced:
+
+```clojure
+(defn under-limit
+  "What each of `refunds`, maps of a Refund's fields, would answer if `user`'s refund limit
+  were `cents`: true or a report. The service's limits are not changed, and no other reader of
+  the service sees `cents`."
+  [refunds user cents]
+  (rec/probe-all Refund refunds rec/every
+                 ;; For this call only, the checks that read `perms/refund-limit` get this
+                 ;; function's answer: the service's own, with the one limit replaced.
+                 {perms/refund-limit
+                  (fn [users] (merge (perms/refund-limit users) (select-keys {user cents} users)))}))
+```
+
+```clojure
+(def waiting [{::actor "eli" ::order-id 42 ::amount 2500} {::actor "eli" ::order-id 42 ::amount 900}])
+(mapv true? (rec/probe-all Refund waiting))   ; eli's limit is 1000
+;; => [false true]
+(mapv true? (under-limit waiting "eli" 3000))
+;; => [true true]
+(mapv true? (under-limit waiting "eli" 500))
+;; => [false false]
+```
+
+**The world of an earlier day.** An audit job reads last month's rows of the refunds table and
+asks whether each refund was allowed when it was issued. Grants have been revoked since, so
+the checks fail today on refunds that were valid when issued. The job has
+the grants and limits of that day from the service's audit log. A stored row is a plain map
+and proves nothing, so the question has to be asked again, of the old world. Here the
+overrides replace both sources outright, and the service is not called:
+
+```clojure
+(defn valid-on-the-day
+  "What each of `refunds`, maps of a Refund's fields as the refunds table stores them, answers
+  under the grants and limits of an earlier day: true or a report. `snapshot` holds that day's
+  `:grants`, a set of `[user action order-id]`, and `:limits`, a map from user to cents."
+  [refunds {:keys [grants limits]}]
+  (rec/probe-all Refund refunds rec/every
+                 ;; Both sources are answered from the snapshot, in the shape the service
+                 ;; answers in, so the service is not called at all.
+                 {perms/allowed      (fn [ks] (into {} (map (fn [k] [k (contains? grants k)])) ks))
+                  perms/refund-limit (fn [users] (select-keys limits users))}))
+```
+
+```clojure
+(def issued [{::actor "dana" ::order-id 42 ::amount 1500} {::actor "eli" ::order-id 41 ::amount 300}])
+(def that-day {:grants #{["dana" :refund 42]} :limits {"dana" 5000 "eli" 1000}})
+(mapv true? (rec/probe-all Refund issued))   ; dana's grant was revoked last week
+;; => [false false]
+(mapv true? (valid-on-the-day issued that-day))
+;; => [true false]
+```
+
+#### The answer in full
+
+`(rec/probe T fields)` answers what `rec/check` with `rec/every` answers of a fresh draft
+holding the map's entries, `true` or a report, with the keys `T` does not declare under
+`:undeclared`. So it is `true` exactly when a seal of that draft would seal:
+
+```clojure
+(rec/probe Heist {::name "Job" ::crew #{"Charlie"} ::take 10 ::cuts {"Charlie" 10}})
+;; => true
+(:missing (rec/probe Heist {::name "Job"}))
+;; => #{:crew.heist/crew :crew.heist/take :crew.heist/cuts}
+(:undeclared (rec/probe Heist {::name "Job" ::crew #{"Charlie"} ::take 0 ::cuts {} ::note 1}))
+;; => #{:crew.heist/note}
+(rec/probe Heist {::name "Job" ::crew #{"Mallory"} ::take 0 ::cuts {}}
+           rec/every {house/vetted (fn [names] (zipmap names (repeat true)))})
+;; => true
+```
+
+- `(rec/probe T fields sel)` runs only what `sel` selects, and reports under `:missing` the
+  absent fields whose presence `sel` asks, as `rec/check` does.
+- The fourth argument maps a source to a function of the same shape that answers in its place,
+  for this call only. Every read of that source in the probe's checks calls it, and the source
+  is not called. Any other run, on this thread or another, reads the source itself.
+- `fields` is any map: a plain map, a record, or a draft or a value of any type. The probe
+  reads its entries, and neither reads nor writes what a draft remembers. It makes no draft
+  and remembers nothing, so no value proves a check that passed under an override.
+- `(rec/probe-all T field-maps)`, with the same arities, answers a vector of what `rec/probe`
+  answers of each map, in one pass, so the maps share each source's calls.
+
 ## Bundles
 
 A **bundle** is a group of checks over named inputs, defined once and bound into many types.
@@ -315,10 +585,12 @@ A **bundle** is a group of checks over named inputs, defined once and bound into
 
 - `defchecks` defines the bundle var and one var per check: `perms/may-cast`. A docstring
   after the bundle's name is the bundle var's, and one after a check's waits is the check's.
-- `defconcern` defines a concern. A clause carries it when `::permission` follows the clause's
-  waits; several concerns are written as a set, `#{::permission ::audit}`. A keyword or set
-  alone after the waits is the body. A concern that no `defconcern` defines is refused, and so
-  is metadata on a clause, its name or its waits, which the macros do not read.
+- `defconcern` defines a concern. A clause carries it when the concern follows the clause's
+  waits, as its symbol `permission` (or `perms/permission`) or its keyword `::permission`;
+  several concerns are written as a set, `#{permission ::audit}`. A flag alone after the waits
+  is the body. A symbol there that names no concern is refused, since it would otherwise be a
+  statement of the body; so is a keyword that no `defconcern` defines, and metadata on a
+  clause, its name or its waits, which the macros do not read.
 - `defcopy` copies a bundle under new names. Its map names every check of the bundle exactly
   once. The copy's ids are in the copying namespace, and its checks keep their concerns and
   docstrings. It takes a docstring after its name, as `defchecks` does.
@@ -479,14 +751,22 @@ then explains, under `:pulled-back`, which check waited on it.
 ```
 
 Under each failed check, `:blocked` holds the checks its failure kept from running, directly or
-through another blocked check. A constructor, a write or a seal that fails throws `ex-info`
-whose data is this report with `:error :recognitum/check-failed` and `:type`. The other errors
-about a value's entries are `:recognitum/undeclared-keys` and `:recognitum/missing-fields`,
-each with the `:keys`.
+through another blocked check. A run adds `:missing`, the required fields the draft lacks
+whose presence its selection asks, where it lacks any. A constructor, a write or a seal that
+fails throws `ex-info` whose data is this report with `:error :recognitum/check-failed` and
+`:type`. It fails where a check fails or a required field is absent, and runs its checks
+either way, so one failure names both: `:failed` holds the failed checks, none where only
+fields are absent, and `:missing` the absent required fields, where there are any:
 
-A missing required field fails each check that reads it with `{:absent key}`, its shape check
-included. `:recognitum/missing-fields` comes only when every check passes and no check read the
-missing field.
+```clojure
+(map->Heist {::name "Bank job" ::crew #{"Charlie"} ::take 10})
+;; ExceptionInfo: crew.heist/Heist failed 1 check and lacks the required field :crew.heist/cuts
+;;   :crew.heist/cuts (each cut is a whole number): {:absent :crew.heist/cuts}, which blocked :crew.heist/cuts-sum-to-take, :crew.heist/only-crew-get-cuts
+```
+
+A missing required field also fails each check that reads it with `{:absent key}`, its shape
+check included. The other error about a value's entries is `:recognitum/undeclared-keys`, with
+the `:keys`, which a seal throws before any check runs.
 
 ## Values checked in parts
 

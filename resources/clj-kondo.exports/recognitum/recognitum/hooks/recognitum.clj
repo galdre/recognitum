@@ -226,17 +226,22 @@
 ;; ----------------------------------------------------------- clause parse
 
 (defn- clause-parts
-  "(name [waits] flags? \"doc\"? body...): flags, a keyword or a set of keywords written after
-  the waits with more forms after it, is the clause's concerns and :override."
-  [clause]
-  (let [[nm waits & more] (:children clause)
-        flags (when (and (or (api/keyword-node? (first more)) (= :set (api/tag (first more)))) (next more))
-                (first more))
-        more (if flags (rest more) more)
-        doc (when (and (api/string-node? (first more)) (next more)) (first more))]
-    {:name nm :waits (when (= :vector (api/tag waits)) (:children waits)) :waits-node waits
-     :flags-node flags :flags (when flags (if (api/keyword-node? flags) [flags] (:children flags)))
-     :doc doc :body (if doc (rest more) more) :meta (:meta clause)}))
+  "(name [waits] flags? \"doc\"? body...): flags, a keyword, a symbol or a set of them written
+  after the waits with more forms after it, is the clause's concerns and :override. With input?
+  true, the clause binds a bundle's input: a symbol there is its body."
+  ([clause] (clause-parts clause false))
+  ([clause input?]
+   (let [[nm waits & more] (:children clause)
+         x (first more)
+         flags (when (and (or (api/keyword-node? x) (= :set (api/tag x)) (and (not input?) (sym x))) (next more))
+                 x)
+         more (if flags (rest more) more)
+         doc (when (and (api/string-node? (first more)) (next more)) (first more))]
+     {:name nm :waits (when (= :vector (api/tag waits)) (:children waits)) :waits-node waits
+      :flags-node flags :flags (when flags (if (= :set (api/tag flags)) (:children flags) [flags]))
+      :doc doc :body (if doc (rest more) more) :meta (:meta clause)})))
+
+(defn- input-parts "An input clause's parts." [clause] (clause-parts clause true))
 
 (defn- def-of
   "`(def nm doc nil)`, or `(def nm nil)` without a docstring."
@@ -256,16 +261,24 @@
         :when (api/keyword-node? k)]
     [k v]))
 
+;; The only test that fails when this stops recording a concern's usage is the clj-kondo run over
+;; test/corpus, which `clojure -X:test` does not run. After a change here, run
+;; `bb test/corpus/corpus_check.bb`: it covers a concern written as a symbol, with an alias and
+;; as a keyword.
 (defn- concern-usages
-  "::c and ::alias/c among a clause's flags become usages of the concern var, at the
-  keyword. A keyword that names a var that no rec/defconcern defines is reported."
+  "::c and ::alias/c among a clause's flags become usages of the concern var, at the keyword;
+  a symbol, c or alias/c, is a usage itself. One that names a var that no rec/defconcern defines
+  is reported; one that names nothing is clj-kondo's unresolved symbol or var. The usages are
+  read outside the scope of the fields and the checks' names, which a flag does not see."
   [ns clause]
-  (for [k (:flags clause) :when (and (api/keyword-node? k) (:namespaced? k))
+  (for [k (:flags clause)
+        :let [s (sym k)]
+        :when (or s (and (api/keyword-node? k) (:namespaced? k)))
         :let [kw (:k k)
-              node (at (symbol (namespace kw) (name kw)) k)
-              target (if (namespace kw)
-                       (api/resolve {:name (api/sexpr node)})
-                       {:ns ns :name (symbol (name kw))})]]
+              node (if s (bare k) (at (symbol (namespace kw) (name kw)) k))
+              target (cond s (resolved k)
+                           (namespace kw) (api/resolve {:name (api/sexpr node)})
+                           :else {:ns ns :name (symbol (name kw))})]]
     (do (when (= :not-a-concern (some-> target concern-status))
           (finding! k :recognitum/not-a-concern
                     (str (api/sexpr node) " is not a concern: no rec/defconcern defines it")))
@@ -306,12 +319,13 @@
      (if (and bundle flags-node)
        (finding! flags-node :recognitum/clause-flag (str flags-node " on " what ": " input-remedy))
        (doseq [f flags
-               :when (not (and (api/keyword-node? f)
-                               (or (:namespaced? f) (namespace (:k f)) (= :override (:k f)))))]
+               :when (not (or (sym f)
+                              (and (api/keyword-node? f)
+                                   (or (:namespaced? f) (namespace (:k f)) (= :override (:k f))))))]
          (finding! f :recognitum/clause-flag
                    (if (api/keyword-node? f)
                      (str "unknown flag " f " on " nm ": a clause's flags are :override and concerns")
-                     (str "a clause's flags are keywords: " f " on " nm))))))))
+                     (str "a clause's flags are keywords and concerns' symbols: " f " on " nm))))))))
 
 (defn- override? [clause]
   (some #(= :override (:k %)) (:flags clause)))
@@ -620,8 +634,8 @@
     ;; input clauses against the bundle's inputs
     (doseq [[{:keys [bundle clauses]} shape] (map vector bundles shapes)
             :when (:inputs shape)
-            :let [named (set (map (comp sym :name clause-parts) clauses))]]
-      (doseq [c clauses :let [n (:name (clause-parts c))]
+            :let [named (set (map (comp sym :name input-parts) clauses))]]
+      (doseq [c clauses :let [n (:name (input-parts c))]
               :when (not (contains? (:inputs shape) (sym n)))]
         (finding! n :recognitum/unknown-input
                   (str "bundle " (sym bundle) " has no input " (sym n))))
@@ -652,7 +666,7 @@
                          (str ". A wait on a bundle's check is qualified: " (symbol (str ns) (str name))))))))
     (doseq [c clauses] (doseq [b (:body c)] (check-body! b required false false)))
     (doseq [c clauses] (clause-flags! c))
-    (doseq [{:keys [bundle clauses]} bundles, c clauses] (clause-flags! (clause-parts c) bundle))
+    (doseq [{:keys [bundle clauses]} bundles, c clauses] (clause-flags! (input-parts c) bundle))
     (doseq [t (concat (keep :checks-token secs) (keep :protocol all-secs))]
       (misplaced-meta! t (str (api/sexpr t)) "name" false))
     (let [shape-check? #(contains? field-syms (sym (:name %)))
@@ -662,6 +676,7 @@
       ;; locals, seen by the waits but not by the bodies.
       (lst (tok 'do)
            (apply lst (tok 'defrecord) T (vct (map fresh field-nodes)) impls)
+           (vct (mapcat (partial concern-usages ns) clauses))
            (lst (tok 'fn) fields
                 (vct (concat
                       [(apply lst (tok 'letfn)
@@ -669,11 +684,10 @@
                               (concat (keep :checks-token secs)
                                       (map (comp bare :bundle) bundles)
                                       (map :name (remove :reported overrides))
-                                      (mapcat (partial concern-usages ns) clauses)
                                       (map #(vct (keep wait-use (:waits %))) clauses)
                                       [(vct (map (comp fresh :name) invariants))]))]
                       when-extants
                       (map :name (filter shape-check? own-clauses))
-                      (mapcat (comp (partial mapcat (comp :body clause-parts)) :clauses) bundles)
+                      (mapcat (comp (partial mapcat (comp :body input-parts)) :clauses) bundles)
                       (map (comp in-body :body) clauses)
                       (map fresh field-nodes))))))))

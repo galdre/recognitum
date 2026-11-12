@@ -21,7 +21,10 @@
           :else :value)))
 
 (deftest the-heist-demo-runs-to-the-end
-  (is (str/includes? (with-out-str (demo.heist-run/-main)) "(rec/proves? h/italian-job rec/every)\n  => true")))
+  (let [out (with-out-str (demo.heist-run/-main))]
+    (is (str/includes? out "(rec/proves? h/italian-job rec/every)\n  => true"))
+    (is (str/includes? out "(rec/probe Heist crew-of-three)\n  => true"))
+    (is (re-find #":missing #\{:demo.heist/(cuts|take) :demo.heist/(cuts|take)\}" out))))
 
 (deftest the-potion-demo-runs-to-the-end
   (let [out (with-out-str (demo.potion-run/-main))

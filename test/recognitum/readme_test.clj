@@ -7,8 +7,11 @@
    [clojure.edn :as edn]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [demo.authz]
    [demo.guild :as guild]
    [demo.heist]
+   [demo.orders]
+   [demo.permissions :as perms]
    [demo.potion]
    [recognitum.core :as rec]))
 
@@ -93,6 +96,10 @@
                                              ::cuts {\"Charlie\" 1000 \"Stella\" 1000}}))"))
       (run-block! 'demo.heist (block "(merge job {::take 3000") as-heist))))
 
+(deftest the-probe-and-the-absent-field-blocks-give-their-results
+  (run-block! 'demo.heist (block "(rec/probe Heist {::name \"Job\" ::crew #{\"Charlie\"} ::take 10") as-heist)
+  (run-block! 'demo.heist (block "(map->Heist {::name \"Bank job\"") as-heist))
+
 (deftest the-failure-report-is-the-report-of-a-negative-take
   (let [shown (edn/read-string (as-heist (block "{:failed  {:crew.heist/take")))
         d (into (rec/draft demo.heist.Heist)
@@ -134,6 +141,25 @@
                                                        (rest lines))))]
           (is (= expected (thrown-message form))))))
     (remove-ns scratch)))
+
+;;; ------------------------------------------------------------------ the uses of a probe
+
+(deftest the-uses-of-a-probe-are-the-demos-and-give-their-results
+  (is (source-holds? "dev/demo/heist.clj" (block "(defn form-errors")))
+  (run-block! 'demo.heist (block "(form-errors {::name") identity)
+  (doseq [text ["(defn under-limit" "(defn valid-on-the-day"]]
+    (is (source-holds? "dev/demo/authz.clj" (block text))))
+  (doseq [form (conj (str/split (block "(defn import-problems") #"\n\n") (block "(defn upload-problems"))]
+    (is (source-holds? "dev/demo/orders.clj" form)))
+  (perms/restore!)
+  (with-scratch-vars 'demo.authz
+    (fn []
+      (run-block! 'demo.authz (block "(def waiting") identity)
+      (perms/revoke! "dana" :refund 42)
+      (try (run-block! 'demo.authz (block "(def issued") identity)
+           (finally (perms/restore!)))))
+  (run-block! 'demo.orders (block "(import-problems\n") identity)
+  (run-block! 'demo.orders (block "(upload-problems #{") identity))
 
 ;;; ------------------------------------------------------------------ the Potion
 

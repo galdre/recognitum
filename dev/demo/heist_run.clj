@@ -62,4 +62,18 @@
                          (rec/union rec/shape (rec/fetching house/vetted))))
     (show (rec/proven-checks d))
     (show (rec/seal d)))
-  (show (rec/proves? h/italian-job rec/every)))
+  (show (rec/proves? h/italian-job rec/every))
+
+  (println "-- asking about plain data, without building anything\n")
+  (show (rec/probe Heist crew-of-three))
+  (show (rec/probe Heist {::h/name "Job" ::h/crew #{"Steve"} ::h/getaway "Steve"}))
+  (show (rec/probe-all Heist [crew-of-three (assoc crew-of-three ::h/crew #{"Charlie" "Stella" "Lyle" "Steve"})]))
+  (show (rec/probe Heist (assoc crew-of-three ::h/crew #{"Charlie" "Stella" "Lyle" "Steve"})
+                   rec/every {house/vetted (fn [names] (zipmap names (repeat true)))}))
+
+  (println "-- a form's mistakes, all at once, as messages; the constructor stops at the first\n")
+  (let [form {::h/name "Job" ::h/crew #{"Charlie" "Steve"} ::h/cuts {"Charlie" 9} ::h/gettaway "Rob"}]
+    (show (h/form-errors form))
+    (show (h/plan-from-form form))
+    (show (h/form-errors (-> form (dissoc ::h/gettaway) (assoc ::h/take 10))))
+    (show (h/form-errors crew-of-three))))

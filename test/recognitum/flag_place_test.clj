@@ -136,8 +136,62 @@
          (refusal '(rec/defchecks b [a] rec/checks (never [] ::nope true)))))
   (is (= "unknown flag :permission on never: a clause's flags are :override and concerns"
          (refusal '(rec/defchecks b [a] rec/checks (never [] :permission true)))))
-  (is (= "a clause's flags are keywords: #{\"x\"} on never"
+  (is (= "a clause's flags are keywords and concerns' symbols: #{\"x\"} on never"
          (refusal '(rec/defchecks b [a] rec/checks (never [] #{"x"} true)))))
   (is (= (str ":override on never: a bundle's check replaces no check; :override is for a"
               " clause of a type that replaces a check of a bound bundle")
          (refusal '(rec/defchecks b [a] rec/checks (never [] :override true))))))
+
+(defn- not-a-concern [s nm]
+  (str s " on " nm " is not a concern: a symbol after a clause's waits names a concern that"
+       " rec/defconcern defines"))
+
+(deftest a-concern-is-named-by-its-symbol
+  (testing "alone, before the body or before a docstring"
+    (let [v ((make '(rec/defproven-in Y [a] rec/checks
+                                      (never [] permission (= a :never))
+                                      (dnever [] audit "never passes" (= a :never)))
+                   'Y)
+             {::a 1})]
+      (is (= #{::never} (rec/checks-of ::permission (class v))))
+      (is (= #{::dnever} (rec/checks-of ::audit (class v))))
+      (is (false? (rec/proves? v ::audit)))))
+  (testing "qualified by an alias, and in a set with a keyword"
+    (let [v ((make '(rec/defproven-in Z [a] rec/checks
+                                      (never [] #{recognitum.flag-place-test/permission ::audit} (= a :never)))
+                   'Z)
+             {::a 1})]
+      (is (= #{::never} (rec/checks-of ::audit (class v)) (rec/checks-of ::permission (class v))))))
+  (testing "on a bundle's check"
+    (is (nil? (refusal '(rec/defchecks sym-checks [a] rec/checks (snever [] permission "never" (= a :never))))))
+    (is (= #{::permission} (:concerns @(resolve 'recognitum.flag-place-test/snever))))))
+
+(deftest a-symbol-that-names-no-concern-is-refused
+  (testing "a name that resolves to nothing, a var that is no concern, a field"
+    (is (= (not-a-concern 'permision 'never)
+           (refusal '(rec/defproven T [a] rec/checks (never [] permision (= a :never))))))
+    (is (= (not-a-concern 'x-positive 'never)
+           (refusal '(rec/defproven T [a] rec/checks (never [] x-positive (= a :never))))))
+    (is (= (not-a-concern 'a 'never)
+           (refusal '(rec/defproven T [a] rec/checks (never [] a "never passes" (= a :never))))))
+    (is (= (not-a-concern 'refusal 'never)
+           (refusal '(rec/defchecks b [a] rec/checks (never [] refusal (= a :never)))))))
+  (testing "in a set"
+    (is (= (not-a-concern 'nope 'never)
+           (refusal '(rec/defproven T [a] rec/checks (never [] #{permission nope} (= a :never))))))))
+
+(deftest a-concern-or-a-symbol-alone-after-the-waits-is-the-body
+  (doseq [form '[(rec/defproven A1 [a] rec/checks (kw [] ::permission))
+                 (rec/defproven A1 [a] rec/checks (kw [] permission))]]
+    (testing (pr-str (last form))
+      (let [mk (make form 'A1)
+            thrown (try (mk {::a 1}) nil (catch clojure.lang.ExceptionInfo e e))]
+        (is (= #{::kw} (set (keys (:failed (ex-data thrown)))))
+            "the check fails: its body returns the concern, which is not true")
+        (is (= #{} (rec/checks-of ::permission (ns-resolve 'recognitum.flag-place-test 'A1))))))))
+
+(deftest a-concern-symbol-on-an-input-clause-is-refused
+  (is (= (str "permission on input clause x of positives" input-remedy)
+         (refusal '(rec/defproven T [a] positives (x [] permission a) rec/checks (ok [] true)))))
+  (testing "any other symbol there is the body"
+    (is (nil? (refusal '(rec/defproven T [a b] positives (x [] b a) rec/checks (ok [] true)))))))
