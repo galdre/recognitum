@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.3 (2026-11-20)
+
+### Changed
+
+- More of the library's internals were reorganized, with no change to the public API of
+  `recognitum.core` or to behavior.
+
 ## 0.3.2 (2026-11-20)
 
 ### Changed

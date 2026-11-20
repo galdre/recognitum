@@ -7,7 +7,7 @@ Types whose values carry proof that their checks passed.
 The library has no Maven or Clojars coordinate. Add it to `deps.edn` as a git dependency:
 
 ```text
-{:deps {io.github.galdre/recognitum {:git/tag "v0.3.2"}}}
+{:deps {io.github.galdre/recognitum {:git/tag "v0.3.3"}}}
 ```
 
 A git dependency also needs the sha of its commit. Run `clojure -X:deps git-resolve-tags` once:
