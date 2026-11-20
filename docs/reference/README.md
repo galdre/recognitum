@@ -15,7 +15,7 @@ here hold the rules that span several functions. Each page stands alone.
 | [Failures](failures.md) | What is in a report, and in the data of a throw? What does `rec/seal-all` throw for the drafts that fail? Which `:error` keywords exist? |
 | [Redefinition](redefinition.md) | What happens to the values, drafts and constructors I hold when a type is defined again? |
 | [Printing, reading, equality and metadata](printing-and-reading.md) | How does a value print and read back? Does it equal a plain map? Does it keep metadata? |
-| [What a definition names](names.md) | Which class, vars and keywords does a definition make, and how does another namespace write them? |
+| [What a definition names](names.md) | Which class, vars and keywords does a definition make, and how does another namespace write them? How does a type compare with a record? |
 | [Editor support](editor-support.md) | What does the clj-kondo configuration report and miss? How do I set up indentation? |
 
 [The guarantee and its limits](../guarantee.md) states what holding a value proves, and what it

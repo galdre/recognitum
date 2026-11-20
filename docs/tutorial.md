@@ -54,12 +54,16 @@ name, a vector that step 5 explains, a docstring, and a body.
 - A check named after a field is that field's **shape check**: it says what the field may
   hold. The last two checks state rules that span fields.
 
-The form defines the class `Heist` and two constructors, `map->Heist` and `->Heist`.
+The form defines the class `Heist` and two constructors, `map->Heist` and `->Heist`. A
+`defrecord` of the same name and fields would define the same three, and a `Heist` is used
+much as a record is. The steps below say where the two agree and where they differ, and
+[reference/names.md](reference/names.md#compared-with-a-record) compares them point by point.
 
 ## 3. Make a value
 
 `map->Heist` takes a map from each field's key to its value. A field's key is the keyword, in
-the namespace of the definition, that has the field's name.
+the namespace of the definition, that has the field's name. Unlike a record's key, it is
+qualified: `::take` here, where a record has `:take`.
 
 ```clojure
 (def job
@@ -78,17 +82,21 @@ the namespace of the definition, that has the field's name.
 
 A constructor runs every check, and returns a value or throws. So a value is proof that every
 check passed on its entries, and `(rec/sealed? x)` asks whether `x` is such a value. `->Heist`
-takes every field in order.
+takes every field in order, as a record's `->` constructor does.
 
-A value reads, compares and hashes as a map of its entries. At a REPL it prints as a tagged
-literal, which is shortened here:
+A value reads, compares and hashes as a map of its entries. As with a record, keyword lookup,
+`get`, destructuring, `keys` and `seq` read it, and `map?` is true of it. Unlike a record, it
+equals a plain map that has its entries, and `record?` is false of it: a `Heist` is not a
+record.
+
+At a REPL a value prints as a tagged literal, which is shortened here:
 
 ```text
 #caper.heist/Heist #:caper.heist{:name "The Italian Job", :crew #{"Stella" "Charlie"}, ...}
 ```
 
-[reference/printing-and-reading.md](reference/printing-and-reading.md) says how to read that
-text back.
+Unlike a record's literal, that text is read back only after the program gives the tag a
+reader. [reference/printing-and-reading.md](reference/printing-and-reading.md) says how.
 
 ## 4. A value that fails
 
@@ -126,7 +134,7 @@ Code that handles a failure reads the exception's data, not its message. The fun
 
 One throw names every failed check, because the constructor runs every check that can run.
 Under `:failed`, `:data` is what the check's body returned. A field that is left out is named
-under `:missing`:
+under `:missing`, where a record's `map->` constructor would give the field `nil`:
 
 ```clojure
 (:missing (failure {::name "Job" ::crew #{"Charlie"} ::take 10}))
@@ -184,6 +192,14 @@ A value refuses a key that is not the key of one of its type's fields:
 (assoc job ::car "Mini")
 ;; ExceptionInfo: caper.heist/Heist has no field :caper.heist/car. Its fields: :caper.heist/name :caper.heist/crew :caper.heist/take :caper.heist/cuts
 ```
+
+A write to a `Heist` and the same write to a record compare as follows:
+
+| Write | To a record | To a `Heist` |
+|---|---|---|
+| `assoc` of a field | Checks nothing, and returns a record. | Runs the checks that read the field, and returns a `Heist` or throws. |
+| `assoc` of a key that is not the key of a field | Returns a record that holds the key. | Throws. |
+| `dissoc` of a field | Returns a plain map. | Throws for a required field. For an optional field, which step 9 shows, it returns a `Heist`. |
 
 [reference/writes.md](reference/writes.md) states which checks each write runs.
 
@@ -256,8 +272,9 @@ explains `^:optional` and `rec/when-extant`, and step 10 explains `rec/fetch-eac
     (every? true? (vals (rec/fetch-each vetted crew)))))
 ```
 
-Evaluating a definition again makes a new class. The values that were made before belong to
-the earlier definition, and they are no longer proof of anything. They still read as maps. A
+Evaluating a definition again makes a new class, as evaluating a `defrecord` again does. The
+values that were made before belong to the earlier definition, and they are no longer proof of
+anything. They still read as maps. Unlike a write to a record of an earlier definition, a
 write to one throws, and so does `rec/check` or `rec/seal` of one. The message of the throw
 gives the way back: `(rec/seal (rec/draft v))` runs the checks of the new definition on the
 entries of such a value `v`, and returns a value of the new definition:

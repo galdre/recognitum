@@ -3,7 +3,8 @@
 Each defining macro makes names in the namespace where it is evaluated. Field keys, check ids
 and concern ids are keywords in that namespace, and the type's class is in the package that
 Java names after the namespace. This
-page lists the names, and how another namespace writes each one.
+page lists the names, and how another namespace writes each one. It also compares what a
+definition makes with what `defrecord` makes.
 
 ```clojure
 (ns air-fleet.plane
@@ -111,6 +112,74 @@ of the `deftype`'s own fields, or it uses `reify`, whose methods close over the 
 A definition whose name already names a var or another class in the namespace is refused, and
 leaves nothing. Evaluating a definition again under the same name is not such a case: it
 redefines the type, as [redefinition.md](redefinition.md) describes.
+
+## Compared with a record
+
+A type is used much as a record is, and it is not built on `defrecord`: the library generates
+the type's class, and a value is a map that is not a record. The table compares a record with
+a value of a type that `rec/defproven` defined. In the table, `T` is the name of the record's
+class or of the type, `f` is the name of a field, and `v` is the record or the value.
+
+| Point | A record | A value of a `rec/defproven` type |
+|---|---|---|
+| What the definition makes | A class, imported into the namespace, and the vars `->T` and `map->T`. | The same, and a tag for printing. |
+| The class's own constructor, `(T. ...)` | Makes a record. | Throws `SecurityException`. |
+| A field's key | The unqualified keyword `:f`. | The keyword `:the.namespace/f`, which the defining namespace writes as `::f`. |
+| `->T` | Takes every field in order, however many there are. | The same, and it runs every check. An optional field that it is given `nil` for is present and holds `nil`. |
+| `map->T` of a map that lacks a field | Gives the field `nil`. | Throws for a required field. Leaves an optional field absent. |
+| `map->T` of a map that holds a key that is not the key of a field | Keeps the key. | Throws. |
+| Keyword lookup, `get`, destructuring, `keys`, `vals`, `seq`, `count`, `contains?`, `reduce-kv` | Read the record as a map, with the fields in the order of the definition. | The same. Destructuring names the qualified keys: `{::keys [f]}`. |
+| A call of the record or the value as a function, `(v k)` | Throws: a record is not a function. | Returns what `(get v k)` returns. |
+| A read of a field by Java interop, `(.f v)` | Returns the field. | Throws: the class has no such field. |
+| `assoc` of a field | Returns a record. | Runs the checks that read the field. Returns a value of the type, or throws. |
+| `assoc` of a key that is not the key of a field | Returns a record that holds the key. | Throws. |
+| `dissoc` of a field | Returns a plain map. | Throws for a required field. Returns a value of the type for an optional field. |
+| `merge`, `into` and `conj` onto the record or the value, and `update` of it | Return a record. | Return a value of the type, checked as [writes.md](writes.md) states, or throw. |
+| `transient` | Throws. | Makes a transient, and `persistent!` of it is one checked write. |
+| `empty` | Throws. | Throws. |
+| `=` with a plain map of the same entries | False. | True, in both directions. |
+| `=` with another record or value | True of a record of the same class with equal fields. | True of any map with equal entries, a value of another type included. |
+| `hash` | Differs from the hash of a plain map of the entries. | Equals that map's hash. |
+| `record?` | True. | False. |
+| `map?`, and `(instance? T v)` | True. | True. |
+| How it prints | `#the.namespace.T{:f 1}` | `#the.namespace/T #:the.namespace{:f 1}` |
+| `str` | The class's name and a hash code, unless the definition gives `toString`. | The printed form, unless the definition gives `toString`. |
+| Reading the printed text | The Clojure reader reads it with no setup, and `clojure.edn` does not read it. | Either reader reads it once the program gives the tag a reader, and the read runs every check: [printing-and-reading.md](printing-and-reading.md). |
+| Metadata | `with-meta` returns a record, and a write keeps the metadata. | `with-meta` returned a sealed value, and a write kept the metadata, where this was tried. [printing-and-reading.md](printing-and-reading.md) says what is not promised. |
+| Protocols and interfaces in the definition | Each is followed by its methods, and in a method body the fields are locals. | The same, written after the checks. Of the methods of `Object`, only `toString` may be given: [the guide to methods](../guides/methods.md). |
+| A protocol extended to the class from outside the definition | Answers for a record. | Answers for a value. |
+| Java serialization | A record comes back as a record. | A value comes back as a plain map, which is not sealed. |
+| The definition evaluated again | Makes a new class. A record of the earlier class still reads and writes, and does not equal a record of the new class. | Makes a new class. A value of the earlier class still reads and still equals a map of its entries. It is not sealed, and a write to it throws: [redefinition.md](redefinition.md). |
+
+The example compares the plane above with a record of the same fields:
+
+```clojure
+(defrecord Glider [name hours])
+
+(def glider (->Glider "Spirit" 12))
+
+(defn error-of
+  "The `:error` of the ex-info that calling `f` throws, or nil where `f` returns."
+  [f]
+  (try (f) nil
+       (catch clojure.lang.ExceptionInfo e (:error (ex-data e)))))
+
+[(record? glider) (record? plane) (map? glider) (map? plane)]
+;; => [true false true true]
+[(= glider {:name "Spirit" :hours 12}) (= plane {::name "Spirit" ::hours 12})]
+;; => [false true]
+[(record? (assoc glider :wings 2)) (error-of #(assoc plane ::wings 2))]
+;; => [true :recognitum/undeclared-keys]
+[(record? (dissoc glider :hours)) (error-of #(dissoc plane ::hours))]
+;; => [false :recognitum/check-failed]
+```
+
+A type that `rec/defproven-in` defined compares with a record as the table states, except in
+the rows on checks. Its constructors and its writes run no check, so `map->T` leaves any
+absent field absent, and `dissoc` of any field returns a value of the type. Its constructors
+and its writes still throw for a key that is not the key of a field. A read of its printed
+text runs no check, and its values are never sealed: `(rec/proves? v sel)` asks what a value
+has passed.
 
 ## Not promised
 

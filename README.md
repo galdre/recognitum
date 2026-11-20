@@ -21,10 +21,20 @@ library:
 
 ## What it is
 
-`rec/defproven` defines a type from its fields and its named **checks**, and every way to make a
-value of the type runs the checks or throws. A value reads and compares as a map, and every
-write to it is checked. So code that holds a value holds proof that the checks passed on its
-entries.
+`rec/defproven` defines a type from its fields and its named **checks**, much as `defrecord`
+defines a record from its fields. As with a record, the definition gives a class and the
+constructors `->T` and `map->T`, a value is read as a map is (by keyword, by destructuring,
+with `keys`), and `assoc` returns a new value of the same class.
+
+Unlike a record, every way to make a value runs the checks or throws, and every write runs the
+checks that read a key it changes. The key of a field is a keyword in the defining namespace:
+`:casino.heist/crew`, where a record has `:crew`. A key that is not the key of a field is
+refused. So code that holds a value holds proof that the checks passed on its entries.
+
+A value is not a record: `record?` is false of it, and it equals a plain map of its entries,
+which a record does not.
+[docs/reference/names.md](docs/reference/names.md#compared-with-a-record) compares the two
+point by point.
 
 A check may ask an outside source, such as a database. When one call of the library checks many
 values, the library collects the reads of their checks and calls the source with the keys
@@ -106,8 +116,12 @@ result: [docs/reference/writes.md](docs/reference/writes.md) states which calls 
   of a value of any type that `rec/defproven` defined.
 - **It does not change data.** A value holds the entries that it was given. The library fills
   in no default and converts nothing.
-- **It is not a defense against code that sets out to defeat it.** The guarantee is against
-  mistakes. Java reflection that overrides access checks can make a value that no check ran on.
+- **It is not impossible to defeat.** The guarantee is against mistakes, and defeating it is
+  hard: each of the two known routes to a sealed value that no check ran on is a deliberate act
+  that overrides Java's access rules. One is reflection after `setAccessible`. The other is a
+  class defined into the type's own package through the type's own class loader.
+  [docs/guarantee.md](docs/guarantee.md#ways-around-the-checks) describes both, and lists the
+  routes that are closed.
 
 [docs/guarantee.md](docs/guarantee.md) states what holding a value proves, and each limit in
 full.

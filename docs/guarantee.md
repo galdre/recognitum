@@ -64,7 +64,8 @@ All three claims are about the past. None says that a check would pass if it ran
 
 ## What establishes the claim for a sealed value
 
-Every way to obtain a sealed value runs checks, and no way skips them:
+Every way that the library gives to obtain a sealed value runs checks, as this table shows.
+[Ways around the checks](#ways-around-the-checks) states what gets past them.
 
 | Way to a value | What runs | What shows it |
 |---|---|---|
@@ -229,10 +230,13 @@ things still accept such a value:
 | Metadata | Changes no entry, so it opens nothing. Whether `with-meta` on a value returns a sealed value is not promised. |
 | The fourth argument of `rec/probe`. A **probe** asks a type's checks about a plain map, and its fourth argument answers in a source's place for that call | Closed: a probe builds no value and remembers nothing, so no value proves a check that passed under it. |
 | `with-redefs` on a source, or a dynamic binding that a body reads | Open, as stated above. |
-| Java reflection that overrides access checks (`setAccessible`), or a class defined into the type's package | Open. The type's access key is a `static final` field of the class, with package access. Two kinds of code can read it: code that reads the field by reflection after `setAccessible`, and a class that is defined into the type's own package through the type's own class loader. Either can then call the constructor with any entries, and the result is a sealed value that no check ran on. Both are deliberate acts, not mistakes, and the library does not guard against them. |
+| Java reflection that overrides access checks (`setAccessible`), or a class defined into the type's package | Open. The type's access key is a `static final` field of the class, with package access. Two kinds of code can read it: code that reads the field by reflection after `setAccessible`, and a class that is defined into the type's own package through the type's own class loader. Either can then call the constructor with any entries, and the result is a sealed value that no check ran on. Both are deliberate acts that override Java's access rules, and the library does not guard against them. |
 | Calling the layers below `recognitum.core` directly (`recognitum.record`, `recognitum.proof`) | Outside this page, which states the guarantee of `recognitum.core` only. |
 
-The guarantee is against mistakes, not against code that sets out to defeat it.
+The guarantee is against mistakes. Defeating it on purpose is hard, and not impossible: of the
+ways that this page covers, only the two routes of the row on reflection give a sealed value
+that no check ran on, and each is a deliberate act that overrides Java's access rules. The
+other open way, a `with-redefs` or a binding, runs the checks, and changes what they see.
 
 ## Checks that throw, and two threads
 

@@ -195,8 +195,9 @@
 
   Values and writes:
 
-  A value reads, compares and hashes as a map of its entries. It prints as the tagged
-  literal `#ns/T {...}`, which calls `map->T` once `ns/T` maps to it in `data_readers.cljc`.
+  A value reads, compares and hashes as a map of its entries, and is not a record: `record?`
+  is false of it. It prints as the tagged literal `#ns/T {...}`, which calls `map->T` once
+  `ns/T` maps to it in `data_readers.cljc`.
   A write to a value (`assoc`, `dissoc`, `conj`, `merge`, `into`) runs the checks that read a
   key the write changes, and returns a new value or throws. One `into`, one `conj` of a map
   and a `merge` of one map each write their keys together, as one write checked on its
