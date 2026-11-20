@@ -23,15 +23,15 @@ library:
 
 `rec/defproven` defines a type from its fields and its named **checks**, much as `defrecord`
 defines a record from its fields. As with a record, the definition gives a class and the
-constructors `->T` and `map->T`, a value is read as a map is (by keyword, by destructuring,
+constructors `->T` and `map->T`, an instance of the type is read as a map is (by keyword, by destructuring,
 with `keys`), and `assoc` returns a new value of the same class.
 
-Unlike a record, every way to make a value runs the checks or throws, and every write runs the
+Unlike a record, every way to make an instance of the type runs the checks or throws, and every write runs the
 checks that read a key it changes. The key of a field is a keyword in the defining namespace:
 `:casino.heist/crew`, where a record has `:crew`. A key that is not the key of a field is
-refused. So code that holds a value holds proof that the checks passed on its entries.
+refused. So code that holds an instance of the type holds proof that the checks passed on its entries.
 
-A value is not a record: `record?` is false of it, and it equals a plain map of its entries,
+An instance of the type is not a record: `record?` is false of it, and it equals a plain map of its entries,
 which a record does not.
 [docs/reference/names.md](docs/reference/names.md#compared-with-a-record) compares the two
 point by point.
@@ -65,7 +65,7 @@ that must pass before it runs, a docstring, and a body in which the fields are l
 check named after a field must also pass before a check that reads the field runs; the vector
 need not name it. A check passes when its body returns exactly `true`.
 
-The constructor `map->Heist` runs every check. It returns a value, or it throws. A **sealed**
+The constructor `map->Heist` runs every check. It returns a `Heist`, or it throws. A **sealed**
 value is a value of the current definition of a `rec/defproven` type, and `rec/sealed?` asks
 whether its argument is one:
 
@@ -98,23 +98,23 @@ the same facts as a map:
 ;;     :blocked #{::only-crew-get-cuts}}
 ```
 
-A write to a value (`assoc`, `dissoc`, `conj`, `merge`, `into`) runs the checks that read a key
+A write to a sealed value (`assoc`, `dissoc`, `conj`, `merge`, `into`) runs the checks that read a key
 the write changes. It returns a new value, or it throws as the constructor throws. `assoc` of
 several keys, and `merge` of several arguments, are several writes, each checked on its own
 result: [docs/reference/writes.md](docs/reference/writes.md) states which calls are one write.
 
 ## What it is not
 
-- **It is not a static type system.** The checks run when the program runs: when a value is
-  made, and when a value is written to.
-- **It does not say that a check would pass now.** A value proves that each check passed when
+- **It is not a static type system.** The checks run when the program runs: when a sealed value is
+  made, and when it is written to.
+- **It does not say that a check would pass now.** A sealed value proves that each check passed when
   the check last ran. A check may ask an outside source, such as a database. Nothing runs that
   check again when the source's answer changes, and the value stays sealed.
 - **It does not make a function ask for proof.** The library proves a value. It does not know
   which functions need proof. A function that needs a proven `Heist` asks two questions of
   what it is handed, `(instance? Heist x)` and `(rec/sealed? x)`: `rec/sealed?` alone is true
   of a value of any type that `rec/defproven` defined.
-- **It does not change data.** A value holds the entries that it was given. The library fills
+- **It does not change data.** A sealed value holds the entries that it was given. The library fills
   in no default and converts nothing.
 - **It is not impossible to defeat.** The guarantee is against mistakes, and defeating it is
   hard: each of the two known routes to a sealed value that no check ran on is a deliberate act
@@ -123,15 +123,15 @@ result: [docs/reference/writes.md](docs/reference/writes.md) states which calls 
   [docs/guarantee.md](docs/guarantee.md#ways-around-the-checks) describes both, and lists the
   routes that are closed.
 
-[docs/guarantee.md](docs/guarantee.md) states what holding a value proves, and each limit in
+[docs/guarantee.md](docs/guarantee.md) states what holding a sealed value proves, and each limit in
 full.
 
 ## How it differs from clojure.spec and Malli
 
 clojure.spec and Malli describe data, and they validate a map when code asks them to. A map
 that passed is afterward an ordinary map: nothing ties it to the validation. `rec/defproven`
-defines a type. Every way to make a value of the type runs the type's checks, every write to a value
-runs the checks that read what the write changes, and the value itself is the evidence that the
+defines a type. Every way to make an instance of the type runs the type's checks, every write to an instance
+runs the checks that read what the write changes, and the instance itself is the evidence that the
 checks passed. The libraries are not rivals: a check's body is ordinary Clojure, so it may call
 a spec or a Malli validator.
 
@@ -158,9 +158,9 @@ Report problems as issues at <https://github.com/galdre/recognitum/issues>.
 | Document | What it holds |
 |---|---|
 | [docs/tutorial.md](docs/tutorial.md) | A first type, built step by step: a definition, a value, a failure, a write, a draft, and a check that asks an outside source. A new user starts here. |
-| [docs/guides/](docs/guides/README.md) | Guides that each work through one task with code that runs, such as building values in steps, checks that ask a database or a service, sharing checks among types, values that are checked in parts, asking a type's checks about plain data, or testing a type. |
+| [docs/guides/](docs/guides/README.md) | Guides that each work through one task with code that runs, such as building a sealed value in steps, checks that ask a database or a service, sharing checks among types, values that are checked in parts, asking a type's checks about plain data, or testing a type. |
 | [docs/reference/](docs/reference/README.md) | The rules that span several functions, one page for each rule. The rules of one function are in its docstring, and the docstring of the namespace `recognitum.core` lists every public function and macro. |
-| [docs/guarantee.md](docs/guarantee.md) | What holding a value proves, what establishes that, and what it does not prove. |
+| [docs/guarantee.md](docs/guarantee.md) | What holding a sealed value proves, what establishes that, and what it does not prove. |
 | [docs/internals.md](docs/internals.md) | The layers below `recognitum.core`, for a reader who builds on them or contributes to the library. |
 
 These commands need a checkout of the repository, because the dependency holds neither the

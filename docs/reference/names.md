@@ -116,7 +116,7 @@ redefines the type, as [redefinition.md](redefinition.md) describes.
 ## Compared with a record
 
 A type is used much as a record is, and it is not built on `defrecord`: the library generates
-the type's class, and a value is a map that is not a record. The table compares a record with
+the type's class, and a value of the type is a map that is not a record. The table compares a record with
 a value of a type that `rec/defproven` defined. In the table, `T` is the name of the record's
 class or of the type, `f` is the name of a field, and `v` is the record or the value.
 

@@ -494,7 +494,7 @@ guarantees, and it is the full statement. In short:
 - **Changes.** `assoc`, `dissoc`, `conj`, `merge` and `into` on a proven value each make one
   call: of the installed write, or of a guard where one is installed. With no write installed,
   every change gives a map that is not proven. `empty` throws.
-- **A value is a map.** A value keeps one field for each key that its definition declares, and
+- **A value of a definition is a map.** It keeps one field for each key that its definition declares, and
   answers as the plain map of its entries. It prints as its map, and the text never reads
   back as a proven value.
 - **Redefinition.** `define-type` again with the same name is a redefinition. The values of

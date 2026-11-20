@@ -59,8 +59,8 @@ The checks sections come first: `rec/checks` and the bindings of bundles. The me
 follow, each a protocol or an interface and then its methods, each `(method [this args...]
 body...)`.
 
-- **The first parameter is the value.** In `escalate` it is `this`. `recur` in a method body
-  takes the method's other arguments, without the value, as in `defrecord`.
+- **The first parameter is the instance of the type.** In `escalate` it is `this`. `recur` in a method body
+  takes the method's other arguments, without the instance, as in `defrecord`.
 - **The fields are locals.** In a method body, the local of an absent optional field is `nil`:
   `describe` tests `assignee` with `when`. A check body differs: there, a read of an absent
   field fails the check. [reference/absence-and-nil.md](../reference/absence-and-nil.md) shows
@@ -123,14 +123,14 @@ throws `UnsupportedOperationException`. Above, `Ticket` gives no `archive`:
 One kind of protocol method is an exception: a method that a map already has, with the same
 name and the same number of arguments, such as `size` with no argument or `valAt` with one. A
 section has to leave such a method out, because the definition refuses it, as the next section
-says. A call of the protocol's function with a value of the type then does not reach a method
+says. A call of the protocol's function with an instance of the type then does not reach a method
 of the type: for `valAt` the map answers, and for `size` the call throws
 `AbstractMethodError`. So a protocol that a type lists should not declare a method that a map
 has.
 
 ## What a definition refuses
 
-A value is also a map, and the definition refuses a method section that would clash with the
+An instance of the type is also a map, and the definition refuses a method section that would clash with the
 map. Each refusal leaves nothing defined, and its message says what to change. Among the
 refusals:
 
@@ -147,7 +147,7 @@ refusals:
   whose methods differ only in return type; `java.util.function.Predicate` or
   `java.util.function.BiConsumer`, which the library implements in a class of its own that it
   generates for the type; and an interface whose `print-method` entry Clojure prefers to a
-  map's, since a value of the type could then not print as its map.
+  map's, since an instance of the type could then not print as its map.
 - **A checks section after a method section.**
 
 The protocol below declares `size` with no argument, which a map has:

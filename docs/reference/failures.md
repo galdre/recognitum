@@ -4,8 +4,8 @@ A failed check reaches the caller in one of two forms:
 
 - **A report, returned.** `rec/check`, `rec/recheck` and `rec/probe` answer `true` or a report,
   and `rec/check-all`, `rec/recheck-all` and `rec/probe-all` answer a vector of such answers.
-- **An `ex-info`, thrown.** A constructor, a write to a sealed value and `rec/seal` return a
-  value or throw. The data of the throw is the report with two more keys, `:error` and `:type`.
+- **An `ex-info`, thrown.** A constructor, a write to a **sealed value** (a value of a
+  `rec/defproven` type) and `rec/seal` return a value or throw. The data of the throw is the report with two more keys, `:error` and `:type`.
 
 Every `ex-info` that a call of the library throws to its caller on purpose holds a keyword
 under `:error` in its data.

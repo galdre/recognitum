@@ -6,8 +6,9 @@ strings, some of them wrong, and the person who filled in the form should hear o
 before anything is saved.
 
 The tool is the **draft**: an unchecked map of a type that `rec/defproven` defined. A draft
-accepts any write, remembers which checks have passed on its entries, and becomes a value when
-`rec/seal` has run the checks that are left.
+accepts any write, remembers which checks have passed on its entries, and becomes a **sealed
+value**, a value of the type that has passed every check, when `rec/seal` has run the checks
+that are left.
 
 ## The solution
 
@@ -88,7 +89,7 @@ is the draft `d` without them.
 
 ## What the solution relies on
 
-**A draft accepts what a value refuses.** `(rec/draft Refund)` makes a draft that holds
+**A draft accepts what the sealed type refuses.** `(rec/draft Refund)` makes a draft that holds
 nothing. A write to a draft runs no check, so the draft above could hold the string `"8oo"` as
 its amount. A draft is not a value of the type: `rec/sealed?` is false for it, and it is not
 an instance of the type's class.
@@ -106,7 +107,7 @@ four shape checks, so the seal ran only `within-limit`, and the service was call
 write makes the new draft forget the checks that read a key the write changes, and no others.
 [reference/memory.md](../reference/memory.md) states what a draft remembers and forgets.
 
-**`rec/seal` returns a value or throws.** It runs every check that the draft does not remember
+**`rec/seal` returns a sealed value or throws.** It runs every check that the draft does not remember
 as passing. A seal that fails throws what the constructor throws, and leaves the draft
 remembering the checks that passed:
 
@@ -147,7 +148,7 @@ key, remembering the checks that passed:
 
 An upload holds several refunds, and all of them must be issued or none. `rec/seal-all` takes
 plain data that holds drafts (maps, vectors, lists and sets, nested as deep as needed) and
-returns that data with each draft replaced by its value. A map, a vector, a set and a list each
+returns that data with each draft replaced by its sealed value. A map, a vector, a set and a list each
 come back as a collection of the same kind. Any other sequence, such as the lazy sequence that
 `map` returns, comes back as a vector, and so does a queue. Where any draft fails,
 `rec/seal-all` throws, and no draft is sealed.
@@ -214,7 +215,7 @@ The docstring of `rec/seal-all` states which collections it looks into for draft
 collection comes back as, what a path is for a set and for a map's key, and what it does with a
 draft that holds drafts.
 
-## A step that works on a value and on a draft
+## A step that works on a sealed value and on a draft
 
 `(rec/drafting v f)` opens the sealed value `v` as a draft, calls `f` on the draft, and seals
 what `f` returns. Given a draft, it calls `f` and returns the result unsealed. So a function
@@ -260,5 +261,5 @@ draft together:
 - **Different code asks different checks of the value, and the value is used before every
   check has passed.** A draft seals against every check. A type that `rec/defproven-in` defines
   is checked in parts: [checked-in-parts.md](checked-in-parts.md).
-- **A change of several keys is valid as a whole.** One `merge` or `into` on the value is one
+- **A change of several keys is valid as a whole.** One `merge` or `into` on the sealed value is one
   write, checked on its result: [reference/writes.md](../reference/writes.md).

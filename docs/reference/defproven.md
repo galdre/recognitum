@@ -78,7 +78,7 @@ it is thrown and what it leaves.
 ## What a definition makes
 
 The class `T`, imported into the namespace, and the vars `map->T` and `->T`. A constructor runs
-every check, and returns a value or throws. [names.md](names.md) lists every name that a
+every check, and returns a value of the type or throws; such a value is **sealed**. [names.md](names.md) lists every name that a
 definition makes, and how another namespace writes each one.
 
 The type's name is a plain symbol. A definition is refused where its name already names a var,
@@ -514,7 +514,7 @@ After the checks sections come the type's protocols and interfaces, mixed, writt
 (name [this parameter ...] body ...)
 ```
 
-- **The first parameter is the value.** The parameters are plain symbols, and `&` is not among
+- **The first parameter is the instance of the type.** The parameters are plain symbols, and `&` is not among
   them.
 - **In a method body the fields are locals**, and the local of an absent field is `nil`. A
   check body differs: there, a read of an absent field throws.
@@ -530,7 +530,7 @@ After the checks sections come the type's protocols and interfaces, mixed, writt
   type made with `rec/draft`, is an instance of none of them.
 - **A section need not give every method.** A call of a method that the section's protocol or
   interface declares and the section does not give throws `UnsupportedOperationException`. One
-  case differs: where a value already has that method as a map, the call gives the map's
+  case differs: where an instance of the type already has that method as a map, the call gives the map's
   answer, or throws `AbstractMethodError` where the two methods' return types differ.
 
 ```clojure
@@ -584,7 +584,7 @@ Refused in a method section:
   none;
 - a method written twice with the same number of parameters;
 - `equals` and `hashCode`, and every other method of `Object` but `toString`;
-- a method that a value already has as a map, such as `count` or `size` with no argument;
+- a method that an instance of the type already has as a map, such as `count` or `size` with no argument;
 - a type hint that names `T`;
 - the interfaces `java.util.function.Predicate` and `java.util.function.BiConsumer`;
 - interfaces that clash with each other or with a map's: two that give default bodies of one
@@ -626,7 +626,7 @@ extended to a type from outside its definition.
 
 ## What a constructor and a write throw
 
-A value reads, compares and hashes as a map of its entries, and it is not a record.
+An instance of the type reads, compares and hashes as a map of its entries, and it is not a record.
 [names.md](names.md) compares the two, and
 [printing-and-reading.md](printing-and-reading.md) states how a value prints and reads back.
 
@@ -793,7 +793,7 @@ that asks to.
 ;; => true
 ```
 
-A value carries, in place, the checks that passed on its entries, and every holder of the
+A value of a `rec/defproven-in` type carries, in place, the checks that passed on its entries, and every holder of the
 value sees what a run writes there. [memory.md](memory.md) states what a value remembers and
 what makes it forget, [selections.md](selections.md) states what `rec/proves?` answers, and
 [redefinition.md](redefinition.md) states what a value of a displaced definition does.

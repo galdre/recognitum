@@ -114,7 +114,7 @@ ways to give a check another answer, and they differ in what the answer can reac
   would be proof of an answer that the real source never gave.
 - **The fourth argument of `rec/probe` or `rec/probe-all`.** The last test uses it. It maps a
   source to a function that answers in the source's place, for that call only. A probe builds
-  no value and remembers nothing, so this way tests the rules, and does not supply values to
+  no instance of the type and remembers nothing, so this way tests the rules, and does not supply values to
   other tests.
 
 `with-redefs` works in the same way on a function that a body calls, since a body calls it

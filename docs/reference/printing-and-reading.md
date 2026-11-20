@@ -1,6 +1,6 @@
 # Printing, reading, equality and metadata
 
-A value prints as a tagged literal, and the tag reads through the type's constructor. So text
+A value of a type prints as a tagged literal, and the tag reads through the type's constructor. So text
 never carries proof: a value that is read from text is made by the constructor, which runs
 every check for a `rec/defproven` type.
 

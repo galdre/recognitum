@@ -117,7 +117,7 @@ report, and seals nothing. A probe differs from it in three ways:
 - **Another answer from a source.** Only a probe takes the fourth argument that
   [a section below](#asking-with-another-answer-from-a-source) describes.
 
-Code that goes on to build the value from the same data, in steps, wants the draft:
+Code that goes on to build a sealed value from the same data, in steps, wants the draft:
 [drafts.md](drafts.md) shows what a draft is for.
 
 ## A dry run of an import
@@ -302,7 +302,7 @@ has a cost:
   type.
 
 With the fourth argument of a probe, the checks are the type's own. No run but that probe
-reads the replacement, on this thread or another. The probe makes no draft and no value, so
+reads the replacement, on this thread or another. The probe makes no draft and no instance of the type, so
 nothing remembers a check that passed under the replacement.
 
 ## The rules
@@ -313,9 +313,9 @@ which fields a selection reports as missing, what a probe answers for a type tha
 
 - For a type that `rec/defproven` defined, a probe with no third and no fourth argument
   answers `true` exactly when `rec/seal` of a draft that holds the map's entries would return
-  a value. So a dry run that is empty means that the constructor will accept each row, as long
+  a sealed value. So a dry run that is empty means that the constructor will accept each row, as long
   as the sources answer the same.
-- A probe answers; it does not prove. Code that needs a value builds one afterward.
+- A probe answers; it does not prove. Code that needs an instance of the type builds one afterward.
 
 [reference/sources.md](../reference/sources.md) states how many calls a source receives from
 one `rec/probe-all`.

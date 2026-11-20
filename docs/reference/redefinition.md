@@ -214,5 +214,5 @@ definition do not, until the protocol is extended to the new class.
 ## Not promised
 
 - While a definition form is being evaluated, the earlier definition may already be displaced
-  before the new names are in place. Code on another thread that makes values of the type
+  before the new names are in place. Code on another thread that makes instances of the type
   during a redefinition may see either.

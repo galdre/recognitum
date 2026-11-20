@@ -3,10 +3,10 @@
 
   [[defproven]] defines a type from its fields and named checks. Its constructors run every
   check or throw, and every write to one of its values runs the checks that read a key the
-  write changes, or throws, so holding a value of the type is holding proof that the checks
-  passed: [[sealed?]] is the whole test, and `instance?` gives the same answer until the type
-  is redefined. A **draft** is an unchecked map of a type, for values built in steps; [[seal]]
-  checks it and returns the value.
+  write changes, or throws. So a value of the type is **sealed**: holding one is holding proof
+  that the checks passed. [[sealed?]] is the whole test, and `instance?` gives the same answer
+  until the type is redefined. A **draft** is an unchecked map of a type, for values built in
+  steps; [[seal]] checks it and returns a sealed value.
 
   [[defproven-in]] defines a type whose values are made and written without checks, and carry
   in place the checks that passed on them: proof is asked with [[proves?]], never `instance?`.
@@ -78,7 +78,7 @@
 
 (defmacro defproven
   "Defines the type `T`: its class, imported into this namespace, and the constructors `map->T`
-  and `->T`, which run every check and return a value or throw.
+  and `->T`, which run every check and return a sealed value or throw.
 
       (rec/defproven Heist [name crew take cuts ^:optional getaway]
         rec/checks
@@ -123,10 +123,10 @@
     several go in one set: `(c [waits] #{concern ::other} \"doc\" body)`. A flag written
     later in the clause, before the body's last form, is refused.
 
-  A write to a value (`assoc`, `dissoc`, `conj`, `merge`, `into`) runs the checks that read a
-  key the write changes, and returns a new value or throws. A constructor or a write that fails
-  throws ex-info: `:error` is `:recognitum/undeclared-keys` for a key the type does not
-  declare, or `:recognitum/check-failed` where a check fails or a required field is absent. A
+  A write to a sealed value (`assoc`, `dissoc`, `conj`, `merge`, `into`) runs the checks that
+  read a key the write changes, and returns a new value or throws. A constructor or a write
+  that fails throws ex-info: `:error` is `:recognitum/undeclared-keys` for a key the type does
+  not declare, or `:recognitum/check-failed` where a check fails or a required field is absent. A
   definition that is refused throws ex-info whose `:error` is `:recognitum/refused`, and
   defines nothing. Evaluating the form again redefines `T`, and the values of the earlier
   definition are no longer sealed.
@@ -143,22 +143,22 @@
 (defmacro defproven-in
   "Defines the type `T` from the form [[defproven]] takes. Nothing runs the type's checks but a
   call that asks to run them: `map->T`, `->T` and the tagged literal check nothing, and a write
-  (`assoc`, `dissoc`, `merge`, `conj`, `into`) checks nothing. A value may therefore lack a
-  required field. A constructor or a write given a key the type does not declare still throws
-  ex-info whose `:error` is `:recognitum/undeclared-keys`.
+  (`assoc`, `dissoc`, `merge`, `conj`, `into`) checks nothing. A value of the type may therefore
+  lack a required field. A constructor or a write given a key the type does not declare still
+  throws ex-info whose `:error` is `:recognitum/undeclared-keys`.
 
       (rec/defproven-in Ballot [choice ^:optional round]
         rec/checks
         (choice [] (string? choice))
         (round-positive [] (rec/when-extant round (pos? round))))
 
-  A value carries, in place, the checks that passed on its entries. [[check]], [[recheck]],
-  [[check-all]], [[recheck-all]], [[seal]] and [[seal-all]] run checks on a value, and the
-  value remembers what passed and forgets what failed; every holder of the value sees what the
-  value remembers. A write returns a new value remembering what the old one passed, less the
-  checks that read a key the write changes.
+  A value of the type carries, in place, the checks that passed on its entries. [[check]],
+  [[recheck]], [[check-all]], [[recheck-all]], [[seal]] and [[seal-all]] run checks on a value,
+  and the value remembers what passed and forgets what failed; every holder of the value sees
+  what the value remembers. A write returns a new value remembering what the old one passed,
+  less the checks that read a key the write changes.
 
-  A value is never sealed: [[sealed?]] answers false, and code that needs proof asks
+  A value of the type is never sealed: [[sealed?]] answers false, and code that needs proof asks
   [[proves?]]. Every value implements the type's protocols and interfaces, whatever it has
   passed. The type has no drafts: [[draft]] given its class, and [[draft]], [[clean]] and
   [[drafting]] given one of its values, throw ex-info whose `:error` is
@@ -320,7 +320,7 @@
   "A draft of a [[defproven]] type: a map that accepts any write, a key the type does not
   declare included, and remembers which checks pass on its entries. A write returns a new
   draft that forgets the checks that read a key it writes. [[seal]] checks a draft and
-  returns the value. A draft does not equal a plain map of its entries. It prints as
+  returns a sealed value. A draft does not equal a plain map of its entries. It prints as
   `#recognitum/draft [ns/T {...}]`, which no reader reads.
 
   - Given a type's class, a draft holding nothing and passing nothing.
@@ -348,8 +348,8 @@
   (record/clean d))
 
 (defn seal
-  "The value of draft `d`, once every check `d` does not remember as passing has passed; a
-  sealed value is returned as it is. A failed seal leaves `d` remembering
+  "The sealed value made from draft `d`, once every check `d` does not remember as passing has
+  passed; a sealed value is returned as it is. A failed seal leaves `d` remembering
   the checks that passed, so the next seal runs only the rest.
 
   With `sel`, a sealed value reads `sel` as [[proves?]] does, and throws as [[proves?]] does
@@ -457,7 +457,7 @@
 
 (defn seal-all
   "Seals every draft in `shape`, a value of plain data, all or nothing, and returns `shape`
-  as the walk below rebuilds it, with each draft replaced by its value. A value of a
+  as the walk below rebuilds it, with each draft replaced by its sealed value. A value of a
   [[defproven-in]] type is sealed in place against `sel` (against [[every]] without one), as
   [[seal]] seals it; drafts are sealed against every check, whatever `sel` is.
 
@@ -474,7 +474,7 @@
   reference such as an atom, a transient, an object of a `deftype`. Seal a draft before
   putting it in one of these, or give `seal-all` the drafts in a vector.
 
-  Inner drafts are sealed first: a draft holding drafts is checked holding their values, or,
+  Inner drafts are sealed first: a draft holding drafts is checked holding their sealed values, or,
   where one failed, that draft. Each draft is checked as [[seal]] would check it, even where a
   draft it holds failed, and remembers what [[seal]] would leave it remembering. The drafts at
   one level, counted from the innermost, are checked in one pass, as [[check-all]] checks

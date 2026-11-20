@@ -88,7 +88,7 @@ named through its var, `visit/billing`.
 - A keyword that is some type's own check id is refused later, when the selection meets a type
   that lacks the check. `rec/check`, `rec/recheck`, `rec/check-all`, `rec/recheck-all`,
   `rec/proves?`, `rec/probe`, `rec/probe-all`, `rec/checks-of` and `rec/selects-nothing?` throw.
-  So does `rec/seal` given a sealed value, or a value of a `rec/defproven-in` type, whose type
+  So does `rec/seal` given a sealed value (a value of a `rec/defproven` type), or a value of a `rec/defproven-in` type, whose type
   lacks the check, and so does `rec/seal-all` given such a value of a `rec/defproven-in` type.
 
 Both throws are `ex-info` whose data holds `:error` `:recognitum/unknown-name`.
@@ -202,7 +202,7 @@ Where `rec/proves?` does not throw, its answer depends on what `x` is:
 ### `rec/proves?` does not ask which type a value has
 
 A selection belongs to no type, so a true answer from `(rec/proves? x sel)` says that `x`
-proves `sel` in the type of `x`, whatever type that is. It does not say that `x` is a value:
+proves `sel` in the type of `x`, whatever type that is. It does not say that `x` is an instance of the type:
 a draft that remembers the checks answers true. Above, `visit` proves `research`, which no
 check of `Visit` carries. In the same way, a sealed value of any type proves `billing`:
 
@@ -213,7 +213,7 @@ check of `Visit` carries. In the same way, a sealed value of any type proves `bi
 ;; => true
 ```
 
-So a function that needs a value of one type asks `(instance? T x)` as well as
+So a function that needs an instance of one type asks `(instance? T x)` as well as
 `(rec/proves? x sel)`. [guides/sinks.md](../guides/sinks.md) shows such a function.
 
 ## A selected check runs the checks it waits on

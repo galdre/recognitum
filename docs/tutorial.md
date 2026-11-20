@@ -80,16 +80,17 @@ qualified: `::take` here, where a record has `:take`.
 ;; => true
 ```
 
-A constructor runs every check, and returns a value or throws. So a value is proof that every
-check passed on its entries, and `(rec/sealed? x)` asks whether `x` is such a value. `->Heist`
-takes every field in order, as a record's `->` constructor does.
+A constructor runs every check, and returns a value of the type or throws. Such a value is
+**sealed**: it is proof that every check passed on its entries, and `(rec/sealed? x)` asks
+whether `x` is a sealed value. `->Heist` takes every field in order, as a record's `->`
+constructor does.
 
-A value reads, compares and hashes as a map of its entries. As with a record, keyword lookup,
+A sealed value reads, compares and hashes as a map of its entries. As with a record, keyword lookup,
 `get`, destructuring, `keys` and `seq` read it, and `map?` is true of it. Unlike a record, it
 equals a plain map that has its entries, and `record?` is false of it: a `Heist` is not a
 record.
 
-At a REPL a value prints as a tagged literal, which is shortened here:
+At a REPL a sealed value prints as a tagged literal, which is shortened here:
 
 ```text
 #caper.heist/Heist #:caper.heist{:name "The Italian Job", :crew #{"Stella" "Charlie"}, ...}
@@ -167,7 +168,7 @@ string:
 
 ## 6. Change a value
 
-A value is written to as a map is: with `assoc`, `dissoc`, `conj`, `merge`, `into`, and the
+A sealed value is written to as a map is: with `assoc`, `dissoc`, `conj`, `merge`, `into`, and the
 functions built on them, such as `update`. A write runs the checks that read a key it changes.
 It returns a new value, or throws as the constructor throws. The value that was written to is
 unchanged.
@@ -186,7 +187,7 @@ The second write fails because a write is checked on its own result, and a take 
 not match the old cuts. The third write changes the take and the cuts together: `merge` of one
 map is one write, and so is `into`. `assoc` of several keys is one write for each key.
 
-A value refuses a key that is not the key of one of its type's fields:
+A sealed value refuses a key that is not the key of one of its type's fields:
 
 ```clojure
 (assoc job ::car "Mini")
@@ -207,9 +208,9 @@ A write to a `Heist` and the same write to a record compare as follows:
 
 Some values are built over several steps, and are not valid until the last one. A **draft** is
 an unchecked map of a type, and it accepts any write. `(rec/draft Heist)` makes a draft that
-holds nothing. `(rec/seal d)` runs the checks on the draft `d`, and returns the value or throws
-as the constructor throws. A seal also throws for a key that is not the key of one of the
-type's fields, as the write to a value does in step 6; it never drops such a key.
+holds nothing. `(rec/seal d)` runs the checks on the draft `d`, and returns a sealed value or
+throws as the constructor throws. A seal also throws for a key that is not the key of one of the
+type's fields, as a write to a sealed value does in step 6; it never drops such a key.
 `(rec/clean d)` returns the draft without those keys, for code that means to drop them.
 
 ```clojure
@@ -240,7 +241,7 @@ remembering three checks, which `rec/proven-checks` lists, so the second seal ra
 other three. A write to a draft makes the new draft forget the checks that read a key the
 write changes.
 
-`(rec/draft job)` opens a value as a draft that holds the value's entries. That is the way to
+`(rec/draft job)` opens a sealed value as a draft that holds the value's entries. That is the way to
 take a value through several writes when the states in between are not valid.
 [guides/drafts.md](guides/drafts.md) shows more, and how to seal many drafts together.
 
@@ -293,7 +294,7 @@ entries of such a value `v`, and returns a value of the new definition:
 
 ## 9. An optional field
 
-A field marked `^:optional` may be absent from a value. Every other field is required. Absent
+A field marked `^:optional` may be absent from a value of the type. Every other field is required. Absent
 means that the value has no entry under the field's key. A field that holds `nil` is present.
 
 ```clojure
@@ -340,7 +341,7 @@ source that queries a database is queried for all of them together.
 A check that reads a source judges the plan by the answer that the source gives when the check
 runs. Nothing runs the check again when the answer changes: `job` stays sealed if the house
 later strikes Charlie from its list.
-[guarantee.md](guarantee.md) states what a value proves and what it does not.
+[guarantee.md](guarantee.md) states what a sealed value proves and what it does not.
 
 ## Where to go next
 
@@ -355,7 +356,7 @@ Each guide works through one task:
 
 | Task | Guide |
 |---|---|
-| Build values in steps, or seal many together | [guides/drafts.md](guides/drafts.md) |
+| Build a sealed value in steps, or seal many together | [guides/drafts.md](guides/drafts.md) |
 | Write checks that ask a database or a service | [guides/sources.md](guides/sources.md) |
 | Ask a type's checks about plain data, and report every mistake at once | [guides/asking-without-building.md](guides/asking-without-building.md) |
 | Share one group of checks among several types | [guides/bundles.md](guides/bundles.md) |
@@ -366,4 +367,4 @@ Each guide works through one task:
 | Work at a REPL, where definitions are evaluated again | [guides/repl.md](guides/repl.md) |
 
 [reference/README.md](reference/README.md) lists the pages that state one rule each in full,
-and [guarantee.md](guarantee.md) states what holding a value proves, and what it does not.
+and [guarantee.md](guarantee.md) states what holding a sealed value proves, and what it does not.

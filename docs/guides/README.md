@@ -6,7 +6,7 @@ runs, and then explains the choices. A reader who is new to the library starts w
 
 | Guide | The task |
 |---|---|
-| [Values built in steps, and values sealed together](drafts.md) | Build a value from data that arrives in pieces or needs mending, and make several values or none. |
+| [Values built in steps, and values sealed together](drafts.md) | Build a sealed value from data that arrives in pieces or needs mending, and make several values or none. |
 | [Checks that ask a database or a service](sources.md) | Write a check that reads an outside source, check a batch with one query, and ask again when the answer may have changed. |
 | [Asking a type's checks about plain data](asking-without-building.md) | Report every mistake of a form at once, try an import before any row is written, and ask the checks with another answer from a source. |
 | [One group of checks for several types](bundles.md) | Write the rules of an address once, use them in several types, twice in one type, and for an optional field. |
@@ -17,5 +17,5 @@ runs, and then explains the choices. A reader who is new to the library starts w
 | [Working at a REPL: when a type is defined again](repl.md) | Bring held values up to the new definition after a type's form is evaluated again. |
 
 The [reference pages](../reference/README.md) state each rule in full, and
-[The guarantee and its limits](../guarantee.md) states what holding a value proves. The
+[The guarantee and its limits](../guarantee.md) states what holding a sealed value proves. The
 [README](../../README.md) says what the library is and how to install it.

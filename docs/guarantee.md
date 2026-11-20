@@ -1,7 +1,7 @@
 # The guarantee and its limits
 
-This page states what holding a value proves, what establishes that, and what it does not
-prove. It is written for a reader who must decide whether to rely on the guarantee.
+This page states what holding a sealed value, a draft, or a value of a `rec/defproven-in` type
+proves, what establishes that, and what it does not prove. It is written for a reader who must decide whether to rely on the guarantee.
 
 ## The claim
 
@@ -20,7 +20,7 @@ that the type binds with `^{:when-extant field}`.
 **For a type that `rec/defproven` defined:** where `(rec/sealed? x)` is true, `x` holds every
 field that is not marked `^:optional`, and every check of the type's current definition has
 passed on the entries that `x` holds. A check passed either when `x` was made, or earlier, on a
-value or a draft that `x` was made from. In the second case, no write since then has changed a
+sealed value or a draft that `x` was made from. In the second case, no write since then has changed a
 field that the check reads.
 
 **For a type that `rec/defproven-in` defined:** nothing checks a value of such a type until a
@@ -67,9 +67,9 @@ All three claims are about the past. None says that a check would pass if it ran
 Every way that the library gives to obtain a sealed value runs checks, as this table shows.
 [Ways around the checks](#ways-around-the-checks) states what gets past them.
 
-| Way to a value | What runs | What shows it |
+| Way to a sealed value | What runs | What shows it |
 |---|---|---|
-| `map->T`, `->T` | Every check. The call returns a value or throws. | Tests build values through both and expect a throw for each failing check. |
+| `map->T`, `->T` | Every check. The call returns a sealed value or throws. | Tests build values through both and expect a throw for each failing check. |
 | The tagged literal `#ns/T {...}`, read from text | Every check: the tag reads through `map->T`. | Tests read a printed value and text that fails a check. |
 | A write: `assoc`, `dissoc`, `conj`, `merge`, `into`, or a transient made from the value | The checks that read a key the write changes. The write returns a new sealed value or throws. | Tests count which checks run for each write, and compare each write with the constructor on the same entries. |
 | `(rec/seal d)` of a draft | Every check that the draft does not remember as passing. | Tests seal drafts after each kind of write and after failed seals. |
@@ -225,10 +225,10 @@ things still accept such a value:
 | Way | Closed or open |
 |---|---|
 | Calling the class's constructor | Closed: it throws without the type's access key. |
-| Printing a value and reading the text, or editing the text first | Closed: the tag reads through `map->T`, which runs every check. |
+| Printing a sealed value and reading the text, or editing the text first | Closed: the tag reads through `map->T`, which runs every check. |
 | Java serialization | Closed: a value is written as a plain map, and comes back as one. |
-| Metadata | Changes no entry, so it opens nothing. Whether `with-meta` on a value returns a sealed value is not promised. |
-| The fourth argument of `rec/probe`. A **probe** asks a type's checks about a plain map, and its fourth argument answers in a source's place for that call | Closed: a probe builds no value and remembers nothing, so no value proves a check that passed under it. |
+| Metadata | Changes no entry, so it opens nothing. Whether `with-meta` on a sealed value returns a sealed value is not promised. |
+| The fourth argument of `rec/probe`. A **probe** asks a type's checks about a plain map, and its fourth argument answers in a source's place for that call | Closed: a probe builds no instance of the type and remembers nothing, so no value proves a check that passed under it. |
 | `with-redefs` on a source, or a dynamic binding that a body reads | Open, as stated above. |
 | Java reflection that overrides access checks (`setAccessible`), or a class defined into the type's package | Open. The type's access key is a `static final` field of the class, with package access. Two kinds of code can read it: code that reads the field by reflection after `setAccessible`, and a class that is defined into the type's own package through the type's own class loader. Either can then call the constructor with any entries, and the result is a sealed value that no check ran on. Both are deliberate acts that override Java's access rules, and the library does not guard against them. |
 | Calling the layers below `recognitum.core` directly (`recognitum.record`, `recognitum.proof`) | Outside this page, which states the guarantee of `recognitum.core` only. |
@@ -282,7 +282,7 @@ The sections above leave the caller four more duties:
   [`rec/check` answers `true` in two cases that prove nothing](#true-from-reccheck).
 - **Keep immutable data in the fields** of a type whose proof must hold:
   [a change inside a mutable object runs no check](#a-mutable-object-in-a-field).
-- **Make no value, and check no draft, under `with-redefs` on a source or under a binding
+- **Make no sealed value, and check no draft, under `with-redefs` on a source or under a binding
   that a check body reads**, unless the proof is meant to rest on the answer given there:
   [the value stays sealed outside it](#a-binding-that-was-in-force-when-a-check-ran).
 - **Ask in a method that is extended to a type's class from outside the definition.** Such a
