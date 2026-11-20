@@ -3,16 +3,53 @@
  ;; syntax-quoted forms included), or an import of a class the module defines.
  :layers {;; the proof
           recognitum.proof           #{}
-          recognitum.proof.key-class #{recognitum.proof}
+          recognitum.proof.key-class.emit #{recognitum.proof}
+          recognitum.proof.key-class.analysis #{recognitum.proof}
+          recognitum.proof.key-class.changes #{}
+          recognitum.proof.key-class #{recognitum.proof recognitum.proof.key-class.analysis
+                                       recognitum.proof.key-class.changes recognitum.proof.key-class.emit}
           ;; the check engine
           recognitum.engine.runtime  #{}
           recognitum.engine.rewrite  #{recognitum.engine.runtime}
-          recognitum.engine          #{recognitum.engine.rewrite recognitum.engine.runtime}
+          recognitum.engine.step     #{recognitum.engine.runtime}
+          recognitum.engine.waves    #{recognitum.engine.runtime recognitum.engine.step}
+          recognitum.engine.runner   #{recognitum.engine.runtime recognitum.engine.step}
+          recognitum.engine          #{recognitum.engine.rewrite recognitum.engine.runner recognitum.engine.runtime
+                                       recognitum.engine.step}
           ;; the record layer: it names neither a proof strategy nor an engine
           recognitum.select          #{}
           recognitum.body            #{}
-          recognitum.record          #{recognitum.proof recognitum.select}
-          recognitum.define          #{recognitum.body recognitum.record recognitum.select}}
+          recognitum.record.reports  #{recognitum.select}
+          recognitum.record.views    #{recognitum.proof}
+          recognitum.record.selection #{recognitum.select}
+          recognitum.record.memory   #{recognitum.proof}
+          recognitum.record.draft    #{recognitum.record.memory}
+          recognitum.record.types    #{recognitum.proof recognitum.record.draft recognitum.record.memory
+                                       recognitum.select}
+          recognitum.record.probe    #{recognitum.proof recognitum.record.draft recognitum.record.reports
+                                       recognitum.record.selection recognitum.record.types recognitum.select}
+          recognitum.record.values   #{recognitum.proof recognitum.record.draft recognitum.record.memory
+                                       recognitum.record.reports recognitum.record.selection recognitum.record.types
+                                       recognitum.select}
+          recognitum.record.runs     #{recognitum.record.draft recognitum.record.memory recognitum.record.probe
+                                       recognitum.record.reports recognitum.record.selection recognitum.record.types
+                                       recognitum.record.values recognitum.select}
+          recognitum.record          #{recognitum.proof recognitum.record.draft recognitum.record.memory
+                                       recognitum.record.probe recognitum.record.reports recognitum.record.runs
+                                       recognitum.record.types recognitum.record.values recognitum.record.views
+                                       recognitum.select}
+          recognitum.record.walk     #{recognitum.proof recognitum.record.draft recognitum.record.reports
+                                       recognitum.record.runs recognitum.record.selection recognitum.record.types
+                                       recognitum.record.values recognitum.select}
+          ;; names the guard macros of recognitum.record.views in each definition's expansion
+          recognitum.define.clauses  #{recognitum.body recognitum.record.probe}
+          recognitum.define.methods  #{recognitum.body recognitum.define.clauses}
+          recognitum.define.bundles  #{recognitum.body recognitum.define.clauses recognitum.select}
+          recognitum.define.checks   #{recognitum.body recognitum.define.bundles recognitum.define.clauses
+                                       recognitum.define.methods recognitum.record}
+          recognitum.define          #{recognitum.body recognitum.define.checks recognitum.define.clauses
+                                       recognitum.define.methods recognitum.record recognitum.record.types
+                                       recognitum.record.values recognitum.record.views}}
 
  ;; the only module that may name a concrete proof strategy or engine: it wires the record
  ;; layer to the engine and the key-class strategy, and is the library's public API
@@ -37,20 +74,22 @@
 
          ;; the bench rows: the library against a hand-written twin, and the engine against a naive one
          recognitum.bench                           #{recognitum.core}
-         recognitum.engine-bench                    #{recognitum.engine}
+         recognitum.engine-bench                    #{recognitum.engine recognitum.engine.waves}
 
          recognitum.body-test                       #{recognitum.core}
          recognitum.bundle-test                     #{recognitum.core recognitum.example.ballot recognitum.example.db
                                                       recognitum.example.perms}
-         ;; counts the engine's runs by redefining recognitum.engine/run-all
-         recognitum.check-test                      #{recognitum.core recognitum.engine recognitum.example.ballot
-                                                      recognitum.example.db recognitum.example.perms demo.heist}
+         ;; counts the engine's runs by redefining recognitum.engine.waves/run-all and recognitum.engine.runner/runner
+         recognitum.check-test                      #{recognitum.core recognitum.engine.runner recognitum.engine.waves
+                                                      recognitum.example.ballot recognitum.example.db recognitum.example.perms
+                                                      demo.heist}
          recognitum.corpus-test                     #{}
          recognitum.demo-test                       #{recognitum.core demo.authz demo.guild demo.heist demo.heist-run
                                                       demo.orders demo.permissions demo.potion demo.potion-run}
-         ;; forges a recognitum.record.Draft to show that seal refuses it
-         recognitum.draft-test                      #{recognitum.core demo.heist demo.house recognitum.record}
-         recognitum.engine-test                     #{recognitum.engine}
+         ;; forges a recognitum.record.draft.Draft to show that seal refuses it
+         recognitum.draft-test                      #{recognitum.core demo.heist demo.house recognitum.record.draft
+                                                      recognitum.record.memory recognitum.record.types}
+         recognitum.engine-test                     #{recognitum.engine recognitum.engine.runner recognitum.engine.waves}
          recognitum.guarded-read-test               #{recognitum.core}
          recognitum.heist-test                      #{recognitum.core demo.heist demo.house}
          ;; runs the README's code blocks as recognitum.docs-test runs a document's
@@ -58,19 +97,22 @@
          ;; runs the code blocks of the documents under docs, which require what they use
          recognitum.docs-test                       #{}
          ;; asks the key-class strategy whether a type's checked write is installed
-         recognitum.record-test                     #{recognitum.core recognitum.proof recognitum.proof.key-class}
-         recognitum.key-class-test                  #{recognitum.proof recognitum.proof.key-class}
+         recognitum.record-test                     #{recognitum.core recognitum.proof recognitum.proof.key-class
+                                                      recognitum.record.views}
+         recognitum.key-class-test                  #{recognitum.proof recognitum.proof.key-class
+                                                      recognitum.proof.key-class.emit}
          recognitum.protocol-test                   #{recognitum.core}
          ;; forges memories of defproven-in values to show that they prove nothing
          recognitum.proven-in-test                  #{recognitum.core recognitum.proof recognitum.proof.key-class
-                                                      recognitum.record}
+                                                      recognitum.record recognitum.record.draft recognitum.record.memory
+                                                      recognitum.record.types}
          recognitum.layers-test                     #{}
          recognitum.wide-test                       #{recognitum.core}
-         ;; reads a source through recognitum.record/sourced to show it allocates nothing
-         recognitum.probe-test                      #{recognitum.core recognitum.record}
+         ;; reads a source through recognitum.record.probe/sourced to show it allocates nothing
+         recognitum.probe-test                      #{recognitum.core recognitum.record.probe}
          recognitum.flag-place-test                 #{recognitum.core}
          ;; counts the calls of recognitum.record/selected to show that emptiness is worked out once per type
-         recognitum.empty-selection-test            #{recognitum.core recognitum.record}
+         recognitum.empty-selection-test            #{recognitum.core recognitum.record.selection}
          recognitum.redefinition-test               #{recognitum.core}
          recognitum.displaced-test                  #{recognitum.core}
          recognitum.proves-test                     #{recognitum.core}

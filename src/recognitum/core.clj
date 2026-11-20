@@ -49,9 +49,17 @@
   (:require
    [recognitum.body :as body]
    [recognitum.define :as define]
+   [recognitum.define.bundles :as bundles]
    [recognitum.engine :as engine]
+   [recognitum.engine.runner :as runner]
+   [recognitum.engine.waves :as waves]
    [recognitum.proof.key-class :as key-class]
-   [recognitum.record :as record]
+   [recognitum.record.draft :as draft]
+   [recognitum.record.probe :as probe]
+   [recognitum.record.runs :as runs]
+   [recognitum.record.types :as types]
+   [recognitum.record.values :as values]
+   [recognitum.record.walk :as walk]
    [recognitum.select :as select]))
 
 (def checks
@@ -63,7 +71,7 @@
   key-class/strategy)
 
 (def ^:private wiring
-  {:strategy strategy :define #'engine/define :run-all #'engine/run-all :runner #'engine/runner})
+  {:strategy strategy :define #'engine/define :run-all #'waves/run-all :runner #'runner/runner})
 
 (def ^:private expansion
   "What the defining macros give the record layer: the engine's compiler of bodies, the body
@@ -197,7 +205,7 @@
    :style/indent [:defn [:defn]]}
   [bname & args]
   (let [[doc inputs marker & clauses] (if (string? (first args)) args (cons nil args))]
-    (define/defchecks &env bname doc inputs marker clauses expansion)))
+    (bundles/defchecks &env bname doc inputs marker clauses expansion)))
 
 (defmacro defcopy
   "Defines `new-name`, a copy of `bundle` whose checks are renamed by `names`, a map from each
@@ -208,7 +216,7 @@
   {:arglists '([new-name doc-string? bundle names])
    :style/indent :defn}
   [new-name & args]
-  (define/defcopy new-name args))
+  (bundles/defcopy new-name args))
 
 (defmacro defcontext
   "Defines `name` as a context: a var holding the selection `sel`, with the docstring `doc`. A
@@ -230,7 +238,7 @@
   refused; that namespace writes `name` or the id in full."
   {:style/indent 1}
   [name doc]
-  (define/defconcern name doc))
+  (bundles/defconcern name doc))
 
 ;;; ------------------------------------------------------------------ check bodies
 
@@ -305,14 +313,14 @@
   `:recognitum/unknown-name` where a keyword among them names no concern, no bundle check and
   no check of a type its namespace defines."
   [s & xs]
-  (record/refuse-unnamed! (apply select/except s xs)))
+  (types/refuse-unnamed! (apply select/except s xs)))
 
 (defn union
   "Selects what any of `xs` selects; `(union)` selects nothing. Throws ex-info whose `:error`
   is `:recognitum/unknown-name` where a keyword among them names no concern, no bundle check
   and no check of a type its namespace defines."
   [& xs]
-  (record/refuse-unnamed! (apply select/union xs)))
+  (types/refuse-unnamed! (apply select/union xs)))
 
 ;;; ------------------------------------------------------------------ values
 
@@ -338,14 +346,14 @@
   Throws ex-info whose `:error` is `:recognitum/no-drafts` given the class or a value of a
   [[defproven-in]] type, and `:recognitum/not-a-type` given anything else."
   [x]
-  (record/draft x))
+  (values/draft x))
 
 (defn clean
   "Draft `d` without the keys its type does not declare, remembering what `d` remembers.
   Throws ex-info whose `:error` is `:recognitum/not-a-draft` given a sealed value, and
   `:recognitum/no-drafts` given a value of a [[defproven-in]] type."
   [d]
-  (record/clean d))
+  (values/clean d))
 
 (defn seal
   "The sealed value made from draft `d`, once every check `d` does not remember as passing has
@@ -386,9 +394,9 @@
   `:recognitum/not-a-value` given a type's class; and `:recognitum/not-a-draft` given anything
   else."
   ([d]
-   (record/seal d))
+   (values/seal d))
   ([d sel]
-   (record/seal d sel)))
+   (values/seal d sel)))
 
 (defn check
   "Runs the checks `sel` selects in `x`, and those they wait on, that `x` does not already pass.
@@ -426,7 +434,7 @@
   for a value, with the message a write to that value gives, and
   `:recognitum/displaced-constructor` for a draft."
   [x sel]
-  (record/check x sel))
+  (runs/check x sel))
 
 (defn recheck
   "Runs the checks `sel` selects in `x` whether or not `x` passes them, and those they wait on
@@ -434,7 +442,7 @@
   [[check]]; a sealed value stays as it is, whatever the checks answer. Returns and throws as
   [[check]] does."
   [x sel]
-  (record/recheck x sel))
+  (runs/recheck x sel))
 
 (defn check-all
   "Runs what [[check]] would run on each value of `xs`, which may be of several types, in one
@@ -444,7 +452,7 @@
   where `xs` holds a value or a draft of a displaced definition, it throws what [[check]] throws
   for that one before any check of any value in `xs` runs."
   [xs sel]
-  (record/check-all xs sel))
+  (runs/check-all xs sel))
 
 (defn recheck-all
   "Runs what [[recheck]] would run on each value of `xs`, which may be of several types, in one
@@ -453,7 +461,7 @@
   vector of what [[recheck]] returns, one per value, in order, and throws as [[check-all]]
   does."
   [xs sel]
-  (record/recheck-all xs sel))
+  (runs/recheck-all xs sel))
 
 (defn seal-all
   "Seals every draft in `shape`, a value of plain data, all or nothing, and returns `shape`
@@ -502,9 +510,9 @@
   with the error `:recognitum/displaced`, beside every other failure, whether or not its
   type's name names a current definition, and is given back in `:drafts` as it is."
   ([shape]
-   (record/seal-all shape ::key))
+   (walk/seal-all shape ::key))
   ([shape sel]
-   (record/seal-all shape sel ::key)))
+   (walk/seal-all shape sel ::key)))
 
 (defn drafting-all
   "[[seal-all]] of `(f opened)`, where `opened` is `shape` walked as [[seal-all]] walks it,
@@ -520,14 +528,14 @@
   Java collection, an array, an atom or an object of a `deftype` is not opened, and `f` gets
   the holder as it is."
   [shape f]
-  (record/drafting-all shape f ::key))
+  (walk/drafting-all shape f ::key))
 
 (defn drafting
   "Given a sealed value, `(seal (f (draft v)))`. Given a draft, `(f v)`, unsealed: `drafting`
   seals only what it opened, so inside [[drafting-all]]'s `f` it leaves the opened drafts to
   [[drafting-all]]'s seal."
   [v f]
-  (record/drafting v f))
+  (walk/drafting v f))
 
 (defn proves?
   "Whether `x` holds every required field and passes the checks `sel` selects, those they wait
@@ -547,7 +555,7 @@
   False, with `sel` unread, for a value or a draft of a displaced definition, one that a later
   definition of its type replaced, for a type's class, and for anything of no type."
   [x sel]
-  (record/proves? x sel))
+  (values/proves? x sel))
 
 (defn probe-all
   "For each map of `field-maps`, whether it would make a valid value of the type whose class is
@@ -574,9 +582,9 @@
   Throws ex-info whose `:error` is `:recognitum/not-a-type` where `T` is not a type's class,
   `:recognitum/displaced-constructor` where `T` is the class of a displaced definition, or
   `:recognitum/not-a-map` where one of `field-maps` is not a map."
-  ([T field-maps] (record/probe-all T field-maps every nil))
-  ([T field-maps sel] (record/probe-all T field-maps sel nil))
-  ([T field-maps sel overrides] (record/probe-all T field-maps sel overrides)))
+  ([T field-maps] (probe/probe-all T field-maps every nil))
+  ([T field-maps sel] (probe/probe-all T field-maps sel nil))
+  ([T field-maps sel overrides] (probe/probe-all T field-maps sel overrides)))
 
 (defn probe
   "What [[probe-all]] answers of the one map `fields`: true where it would make a valid value
@@ -585,9 +593,9 @@
 
       (rec/probe Heist fields)
       (rec/probe Heist fields rec/every {db/on-file (fn [ks] (zipmap ks (repeat true)))})"
-  ([T fields] (record/probe T fields every nil))
-  ([T fields sel] (record/probe T fields sel nil))
-  ([T fields sel overrides] (record/probe T fields sel overrides)))
+  ([T fields] (probe/probe T fields every nil))
+  ([T fields sel] (probe/probe T fields sel nil))
+  ([T fields sel overrides] (probe/probe T fields sel overrides)))
 
 (defn proven-checks
   "The ids of the checks `x` passes: all of its type's for a sealed value, and those a draft or
@@ -595,13 +603,13 @@
   definition of its type replaced, a value has none, and a draft has those it remembers,
   though [[proves?]] of that draft is false."
   [x]
-  (record/proven-checks x))
+  (values/proven-checks x))
 
 (defn proven-concerns
   "The ids of the concerns whose checks `x` passes, as [[proves?]] judges each: none for a draft
   that holds a key its type does not declare."
   [x]
-  (record/proven-concerns x))
+  (values/proven-concerns x))
 
 (defn checks-of
   "The ids of the checks `sel` selects in the type of `x`, which is a value, a draft or a
@@ -609,7 +617,7 @@
   it too. Throws ex-info whose `:error` is `:recognitum/unknown-name` where `sel` is or holds a
   keyword that names no check of the type, no concern and no bundle check."
   [sel x]
-  (record/checks-of sel x))
+  (values/checks-of sel x))
 
 (defn selects-nothing?
   "Whether `sel` selects nothing in the type of `x`, a value, a draft or a type's class: none
@@ -621,18 +629,18 @@
   it is false. Runs nothing; throws where `sel` names a check the type lacks, as
   [[checks-of]] does."
   [sel x]
-  (record/selects-nothing? sel x))
+  (values/selects-nothing? sel x))
 
 (defn sealed?
   "Whether `x` is a value of the current definition of a [[defproven]] type. False for every
   value of a [[defproven-in]] type, whatever it has passed: proof is asked with [[proves?]]."
   [x]
-  (record/sealed? x))
+  (values/sealed? x))
 
 (defn draft?
   "Whether `x` is a draft."
   [x]
-  (record/draft? x))
+  (draft/draft? x))
 
 (defn data-readers
   "A map from each type's tag to its `map->T`, for `clojure.edn/read` as `:readers`: one entry
@@ -640,5 +648,5 @@
   redefinition of its type throws ex-info whose `:error` is
   `:recognitum/displaced-constructor`, as a held `map->T` does."
   []
-  (into {} (for [[n t] (record/current-types)]
-             [n #(record/make t % "Read again with the current readers: (rec/data-readers)")])))
+  (into {} (for [[n t] (types/current-types)]
+             [n #(values/make t % "Read again with the current readers: (rec/data-readers)")])))

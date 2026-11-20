@@ -5,10 +5,11 @@
    [recognitum.core :as rec]
    [demo.heist :as h]
    [demo.house :as house]
-   [recognitum.record :as record])
+   [recognitum.record.types :as types])
   (:import
    (demo.heist Heist)
-   (recognitum.record Draft Memo)))
+   (recognitum.record.draft Draft)
+   (recognitum.record.memory Memo)))
 
 (defn- err [f]
   (try (f) nil (catch clojure.lang.ExceptionInfo e (ex-data e))))
@@ -100,11 +101,11 @@
 (deftest a-memory-built-by-hand-around-a-copied-type-map-names-no-type
   ;; The copy claims plain maps as its sealed values, so a memory whose proof is the bad map
   ;; itself would show every check passing; the type's own gate does not answer the copy.
-  (let [t (record/type-of Heist)
+  (let [t (types/type-of Heist)
         copy (assoc t :recognitum.record/class clojure.lang.PersistentArrayMap)
         bad (assoc entries ::h/take -1)
         forged (Draft. bad (atom (Memo. copy bad (:ids t) #{} bad nil)) nil 0)]
-    (is (nil? (:name (record/type-of forged))))
+    (is (nil? (:name (types/type-of forged))))
     (is (false? (rec/proves? forged rec/every)))
     (is (= :recognitum/not-a-type (:error (err #(rec/proven-checks forged)))))
     (is (= :recognitum/not-a-type (:error (err #(rec/check-all [forged] rec/every)))))
@@ -232,7 +233,7 @@
   ;; Each memory claims every check passing on bad entries, with a proof that does not show
   ;; it: another sealed value, the bad entries themselves, and a draft of the type that no
   ;; check was marked on.
-  (let [t (record/type-of Heist)
+  (let [t (types/type-of Heist)
         bad (assoc entries ::h/take -1)
         all (clojure.lang.Reflector/getInstanceField (:recognitum.record/hot t) "all")
         unmarked (.newInstance (.getConstructor ^Class (:recognitum.record/draft-class t) (make-array Class 0))

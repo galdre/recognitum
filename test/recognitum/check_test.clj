@@ -3,7 +3,8 @@
   (:require
    [clojure.test :refer [deftest is testing]]
    [recognitum.core :as rec]
-   [recognitum.engine :as engine]
+   [recognitum.engine.runner :as runner]
+   [recognitum.engine.waves :as waves]
    [recognitum.example.ballot :as ballot]
    [recognitum.example.db :as db]
    [recognitum.example.perms :as perms]
@@ -69,11 +70,11 @@
 
 (deftest check-all-runs-a-group-of-several-types-in-one-run
   (let [runs (atom [])
-        run-all engine/run-all
+        run-all waves/run-all
         drafts [(into (rec/draft Ballot) row)
                 (into (rec/draft Tally) tally)
                 (into (rec/draft Ballot) (assoc row ::ballot/cast-by "bob"))]]
-    (with-redefs [engine/run-all (fn [items] (swap! runs conj (count items)) (run-all items))]
+    (with-redefs [waves/run-all (fn [items] (swap! runs conj (count items)) (run-all items))]
       (let [[a b c] (rec/check-all drafts perms/may-cast)]
         (is (true? a))
         (is (true? b))
@@ -130,9 +131,9 @@
 
 (deftest check-all-runs-nothing-on-sealed-values
   (let [runs (atom 0)
-        run-all engine/run-all
+        run-all waves/run-all
         values [(ballot/map->Ballot row) h/italian-job]]
-    (with-redefs [engine/run-all (fn [items] (swap! runs inc) (run-all items))]
+    (with-redefs [waves/run-all (fn [items] (swap! runs inc) (run-all items))]
       (is (= [true true] (rec/check-all values rec/every))))
     (is (zero? @runs))))
 
@@ -212,8 +213,8 @@
   "How many times `f` calls the engine's full run, and what it returns."
   [f]
   (let [n (atom 0)
-        run-all engine/run-all]
-    (with-redefs [engine/run-all (fn [items] (swap! n inc) (run-all items))]
+        run-all waves/run-all]
+    (with-redefs [waves/run-all (fn [items] (swap! n inc) (run-all items))]
       (let [r (f)] [@n r]))))
 
 (deftest a-run-with-every-source-check-assumed-skips-the-engines-full-run
@@ -255,8 +256,8 @@
         writing (fn [bits x] (reduce (fn [d i] (if (bit-test bits i) (assoc d (ks i) x) d)) (rec/draft v) (range 12)))
         error (fn [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (:error (ex-data e)))))
         builds (atom 0)
-        runner engine/runner]
-    (with-redefs [engine/runner (fn [& args] (swap! builds inc) (apply runner args))]
+        runner runner/runner]
+    (with-redefs [runner/runner (fn [& args] (swap! builds inc) (apply runner args))]
       (is (= v (rec/seal (rec/draft v))))
       (is (= 0 @builds) "a draft that passes every check runs none")
       (doseq [bits (range 1 1100)]

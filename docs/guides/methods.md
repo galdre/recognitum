@@ -87,7 +87,7 @@ function throws for it. The drafts of every type have one class:
 (instance? Comparable (rec/draft printer))
 ;; => false
 (describe (rec/draft printer))
-;; IllegalArgumentException: No implementation of method: :describe of protocol: #'help-desk.ticket/Describe found for class: recognitum.record.Draft
+;; IllegalArgumentException: No implementation of method: :describe of protocol: #'help-desk.ticket/Describe found for class: recognitum.record.draft.Draft
 ```
 
 A value of a type that `rec/defproven-in` defined implements the type's protocols and

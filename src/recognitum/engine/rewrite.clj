@@ -117,6 +117,11 @@
                 (cps (args i) (fn [v] (go (inc i) (conj acc v))))))]
       (go 0 []))))
 
+(defn- cps-call
+  "The rewrite of `(op args...)`: args evaluated in order, then the call's value goes to k."
+  [args op k]
+  (cps-args args (fn [vs] (bind `(~op ~@vs) k))))
+
 (defn- cps-bind [bs tail]
   (if (empty? bs)
     (tail)
@@ -209,7 +214,7 @@
         new (cps-args (nnext form) (fn [vs] (bind `(new ~(second form) ~@vs) k)))
         set! (cps (nth form 2) (fn [v] (bind `(set! ~(second form) ~v) k)))
         (if (or (symbol? op) (keyword? op))
-          (cps-args (rest form) (fn [vs] (bind `(~op ~@vs) k)))
+          (cps-call (rest form) op k)
           (cps-args form (fn [[f & vs]] (bind `(~f ~@vs) k))))))))
 
 (defn cps
@@ -218,9 +223,9 @@
   (cond
     (not (needs? form)) (bind form k)
     (seq? form) (cps-seq form k)
-    (vector? form) (cps-args form (fn [vs] (bind `(vector ~@vs) k)))
-    (map? form) (cps-args (mapcat identity form) (fn [vs] (bind `(hash-map ~@vs) k)))
-    (set? form) (cps-args form (fn [vs] (bind `(hash-set ~@vs) k)))
+    (vector? form) (cps-call form `vector k)
+    (map? form) (cps-call (mapcat identity form) `hash-map k)
+    (set? form) (cps-call form `hash-set k)
     :else (bind form k)))
 
 (defn rewrite

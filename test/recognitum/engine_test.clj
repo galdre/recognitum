@@ -6,7 +6,9 @@
   (:require
    [clojure.test :refer [deftest is]]
    [clojure.walk :as walk]
-   [recognitum.engine :as e]))
+   [recognitum.engine :as e]
+   [recognitum.engine.runner :as runner]
+   [recognitum.engine.waves :as waves]))
 
 (def ^:dynamic *dyn* :outer)
 
@@ -31,7 +33,7 @@
   "The result of running the checks `checks` over `values`, each with nothing assumed."
   [checks values]
   (let [eng (engine checks)]
-    (e/run-all (map (fn [v] [eng v #{}]) values))))
+    (waves/run-all (map (fn [v] [eng v #{}]) values))))
 
 ;;; ------------------------------------------------------------- reads and names
 
@@ -51,7 +53,7 @@
   (let [helper (create-ns 'recognitum.engine-test.helper)]
     (binding [*ns* helper] (refer-clojure) (intern helper 'fetch (fn [m k] (get m k))))
     (let [eng (e/define {:a {:after #{} :body (binding [*ns* helper] (eval (e/body-form '(fetch {:x 1} :x))))}})]
-      (is (= [{:failed {:a 1} :blocked #{}}] (e/run-all [[eng {} #{}]]))))))
+      (is (= [{:failed {:a 1} :blocked #{}}] (waves/run-all [[eng {} #{}]]))))))
 
 (deftest a-field-read-is-its-read-form-and-nothing-else
   (is (= [{:failed {:a [1 [2 3] 5 '(&field :k) {:recognitum.checks/absent :g}]} :blocked #{}}]
@@ -94,7 +96,7 @@
             {:failed {:b false} :blocked #{:c}}
             {:failed {} :blocked #{}}
             {:failed {} :blocked #{}}]
-           (e/run-all [[eng {:k "x"} #{}] [eng {:k 2} #{}] [eng {:k 1} #{}] [eng {:k "x"} #{:a :b}]])))
+           (waves/run-all [[eng {:k "x"} #{}] [eng {:k 2} #{}] [eng {:k 1} #{}] [eng {:k "x"} #{:a :b}]])))
     (is (= [[2 1]] @calls) "the blocked and assumed checks read nothing")))
 
 (deftest failures-carry-what-the-body-met
@@ -132,11 +134,11 @@
                      :b {:after #{:a} :body '(= :caller *dyn*)}
                      :c {:after #{} :body '(binding [*dyn* :inner] [(&fetch same-src 1) *dyn*])}})]
     (is (= [{:failed {:c [1 :inner]} :blocked #{}}]
-           (binding [*dyn* :caller] (e/run-all [[eng {} #{}]]))))
+           (binding [*dyn* :caller] (waves/run-all [[eng {} #{}]]))))
     (is (= :outer *dyn*))))
 
 (deftest an-empty-group-runs-nothing
-  (is (= [] (e/run-all []))))
+  (is (= [] (waves/run-all []))))
 
 ;;; ------------------------------------------------------------- runners
 
@@ -147,14 +149,14 @@
                      :c {:after #{:b} :body '(< (&field :k) 10)}
                      :d {:after #{:c} :body '{:d (&field :k)}}
                      :f {:after #{} :body '(= 1 (&fetch same-src (&field :k)))}})
-        r (e/runner eng [:a :b :c :d])]
+        r (runner/runner eng [:a :b :c :d])]
     (doseq [[v assumed] (concat (for [v [{:k "x"} {:k -1} {:k 20} {:k 1} {}]] [v #{}])
                                 (for [v [{:k -1} {:k 20} {:k 1}], a [#{:a} #{:b :c}]] [v a]))]
-      (is (= (first (e/run-all [[eng v (conj assumed :f)]])) (r v assumed)) [v assumed]))
+      (is (= (first (waves/run-all [[eng v (conj assumed :f)]])) (r v assumed)) [v assumed]))
     (is (= {:failed {:a false} :blocked #{:b :c :d}} (r {:k "x"} #{}))
         "a blocked check blocks the checks that wait on it")
-    (is (= {:failed {} :blocked #{}} ((e/runner eng [:b :c]) {:k 5} #{})) "a check outside the runner counts as passed")
-    (is (= {:failed {} :blocked #{}} ((e/runner eng []) {:k "x"} #{})))
+    (is (= {:failed {} :blocked #{}} ((runner/runner eng [:b :c]) {:k 5} #{})) "a check outside the runner counts as passed")
+    (is (= {:failed {} :blocked #{}} ((runner/runner eng []) {:k "x"} #{})))
     (is (= [] @calls) "no source was called but by the runs that held :f")))
 
 (deftest a-runner-of-one-check-or-none-answers-as-run-all-with-the-others-assumed
@@ -165,12 +167,12 @@
     (doseq [named [[:a] [:b] [:d] []]
             v [{:k "x"} {:k -1} {:k 1} {}]
             assumed [nil #{} [] #{:a} [:b] #{:d :f} (set named) (vec named)]]
-      (is (= (first (e/run-all [[eng v (into (set assumed) (remove (set named)) [:a :b :d :f])]]))
-             ((e/runner eng named) v assumed))
+      (is (= (first (waves/run-all [[eng v (into (set assumed) (remove (set named)) [:a :b :d :f])]]))
+             ((runner/runner eng named) v assumed))
           [named v assumed]))
-    (is (= {:failed {:b false} :blocked #{}} ((e/runner eng [:b]) {:k -1} nil))
+    (is (= {:failed {:b false} :blocked #{}} ((runner/runner eng [:b]) {:k -1} nil))
         "a check that waits on one outside the runner runs as if that one passed")
-    (is (= {:failed {:d {:d 3}} :blocked #{}} ((e/runner eng [:d]) {:k 3} #{})))))
+    (is (= {:failed {:d {:d 3}} :blocked #{}} ((runner/runner eng [:d]) {:k 3} #{})))))
 
 (deftest a-runner-of-one-check-compiled-elsewhere-answers-as-run-all
   ;; A body-form check brings its own run of that check alone; a function of a value does not,
@@ -180,10 +182,10 @@
                      :s {:after #{} :body (fn [_] (throw (ex-info "absent" {:recognitum.checks/absent :k})))}
                      :t {:after #{} :body (fn [_] (throw (ArithmeticException.)))}})]
     (doseq [named [[:a] [:s]], v [{:k 1} {:k "x"} {}], assumed [nil #{} #{:a} [:s]]]
-      (is (= (first (e/run-all [[eng v (into (set assumed) (remove (set named)) [:a :s :t])]]))
-             ((e/runner eng named) v assumed))
+      (is (= (first (waves/run-all [[eng v (into (set assumed) (remove (set named)) [:a :s :t])]]))
+             ((runner/runner eng named) v assumed))
           [named v assumed]))
-    (is (thrown? ArithmeticException ((e/runner eng [:t]) {} nil)))))
+    (is (thrown? ArithmeticException ((runner/runner eng [:t]) {} nil)))))
 
 (deftest a-runner-refuses-a-read-of-a-source
   (reset! calls [])
@@ -191,23 +193,23 @@
                      :f {:after #{:a} :body '(try (&fetch same-src (&field :k)) (catch Throwable _ true))}
                      :e {:after #{} :body '(= {} (&fetch-each same-src []))}})
         refusal (fn [r v] (try (r v #{}) nil (catch clojure.lang.ExceptionInfo x (ex-data x))))]
-    (is (= {:error :recognitum.checks/reads-source :reads-source :f} (refusal (e/runner eng [:a :f]) {:k 1}))
+    (is (= {:error :recognitum.checks/reads-source :reads-source :f} (refusal (runner/runner eng [:a :f]) {:k 1}))
         "whatever the body does with the read")
-    (is (= :e (:reads-source (refusal (e/runner eng [:e]) {}))) "a read of no keys")
-    (is (= {:failed {:a false} :blocked #{:f}} ((e/runner eng [:a :f]) {:k "x"} #{})) "a blocked check reads nothing")
+    (is (= :e (:reads-source (refusal (runner/runner eng [:e]) {}))) "a read of no keys")
+    (is (= {:failed {:a false} :blocked #{:f}} ((runner/runner eng [:a :f]) {:k "x"} #{})) "a blocked check reads nothing")
     (is (= [] @calls))
     (let [eng (engine {:b {:after #{} :body '(binding [*dyn* :inner] (&fetch same-src 1))}})]
       (binding [*dyn* :caller]
-        (is (= :b (:reads-source (refusal (e/runner eng [:b]) {}))))
+        (is (= :b (:reads-source (refusal (runner/runner eng [:b]) {}))))
         (is (= :caller *dyn*) "the caller's bindings are restored")))))
 
 (deftest a-runner-propagates-a-throw
   (let [eng (engine {:a {:after #{} :body '(= 1 (/ 1 (&field :k)))}
                      :b {:after #{} :body '(= :caller *dyn*)}})
-        r (e/runner eng [:a :b])]
+        r (runner/runner eng [:a :b])]
     (is (thrown? ArithmeticException (r {:k 0} #{})))
-    (is (thrown? ArithmeticException ((e/runner eng [:a]) {:k 0} #{})) "a runner of one check too")
-    (is (true? (binding [*dyn* :caller] (empty? (:failed ((e/runner eng [:b]) {} nil))))))
+    (is (thrown? ArithmeticException ((runner/runner eng [:a]) {:k 0} #{})) "a runner of one check too")
+    (is (true? (binding [*dyn* :caller] (empty? (:failed ((runner/runner eng [:b]) {} nil))))))
     (is (= {:failed {} :blocked #{}} (binding [*dyn* :caller] (r {:k 1} #{}))) "and sees the caller's bindings")))
 
 (deftest a-runner-of-one-check-catches-a-signal-from-the-body-and-none-from-after-it
@@ -216,14 +218,14 @@
                      :r {:after #{} :body '(if (int? (&field :k)) {:r 1} (&fetch same-src 1))}
                      :f {:after #{} :body (fn [v] {:f (:k v)})}
                      :s {:after #{} :body '(throw (ex-info "absent" {:recognitum.checks/absent :k}))}})]
-    (is (= {:failed {:s {:absent :k}} :blocked #{}} ((e/runner eng [:s]) {} nil))
+    (is (= {:failed {:s {:absent :k}} :blocked #{}} ((runner/runner eng [:s]) {} nil))
         "a signal from the body is the check's failure")
     (doseq [id [:p :r :f]]
-      (is (= :made-after (with-redefs [e/answer-one (fn [_ _ _] :made-after)]
-                           ((e/runner eng [id]) {:k 1} nil)))
+      (is (= :made-after (with-redefs [runner/answer-one (fn [_ _ _] :made-after)]
+                           ((runner/runner eng [id]) {:k 1} nil)))
           "the answer to a body that fails is made after the body")
       (is (identical? signal
-                      (with-redefs [e/answer-one (fn [_ _ _] (throw signal))]
-                        (try ((e/runner eng [id]) {:k 1} nil) nil
+                      (with-redefs [runner/answer-one (fn [_ _ _] (throw signal))]
+                        (try ((runner/runner eng [id]) {:k 1} nil) nil
                              (catch clojure.lang.ExceptionInfo x x))))
           (str id ": the same signal thrown there passes through")))))

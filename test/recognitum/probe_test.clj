@@ -7,7 +7,7 @@
    [clojure.test.check.generators :as gen]
    [clojure.test.check.properties :as prop]
    [recognitum.core :as rec]
-   [recognitum.record :as record]))
+   [recognitum.record.probe :as probe]))
 
 (defn- err [f]
   (try (f) nil (catch clojure.lang.ExceptionInfo e (ex-data e))))
@@ -580,7 +580,7 @@
     (testing "a read of a source with no probe allocates nothing"
       (let [mx (java.lang.management.ManagementFactory/getThreadMXBean)
             tid (.getId (Thread/currentThread))
-            go (fn [] (dotimes [_ 100000] (record/sourced on-file)))
+            go (fn [] (dotimes [_ 100000] (probe/sourced on-file)))
             _ (go)
             before (.getThreadAllocatedBytes ^com.sun.management.ThreadMXBean mx tid)
             _ (go)

@@ -7,9 +7,11 @@
    [recognitum.core :as rec]
    [recognitum.proof :as proof]
    [recognitum.proof.key-class :as key-class]
-   [recognitum.record :as record])
+   [recognitum.record :as record]
+   [recognitum.record.types :as types])
   (:import
-   (recognitum.record Draft Memo)))
+   (recognitum.record.draft Draft)
+   (recognitum.record.memory Memo)))
 
 (def ^:private log (atom []))
 
@@ -100,7 +102,7 @@
     (is (rec/proves? (:v held) ::b-not-below-a))))
 
 (deftest a-hand-built-memory-proves-nothing
-  (let [type (record/type-of Ballot)]
+  (let [type (types/type-of Ballot)]
     (testing "a value as its own proof, which shows every check of a sealed type"
       (let [v (map->Ballot {::a 0 ::b 1})]
         (reset! (memory v) (Memo. type v (:ids type) #{} v nil))
@@ -227,7 +229,7 @@
 
 (deftest a-type-given-where-a-value-belongs-is-refused
   (doseq [[t n] [[Box 'recognitum.proven-in-test/Box] [Ballot 'recognitum.proven-in-test/Ballot]]
-          x [t (record/type-of t)]
+          x [t (types/type-of t)]
           f [#(rec/check x rec/every) #(rec/recheck x rec/every) #(rec/seal x) #(rec/seal x rec/every)
              #(rec/check-all [x] rec/every) #(rec/recheck-all [x] rec/every)
              #(rec/proven-checks x) #(rec/proven-concerns x) #(rec/clean x) #(rec/drafting x identity)]]
@@ -235,12 +237,12 @@
            (try (f) nil (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)])))
         (str n (when (map? x) "'s type map"))))
   (testing "proves? answers false for a type's class and its type map"
-    (doseq [t [Box Ballot], x [t (record/type-of t)]]
+    (doseq [t [Box Ballot], x [t (types/type-of t)]]
       (is (false? (rec/proves? x rec/every)))))
   (testing "draft opens a type's class, and refuses its type map"
     (is (rec/draft? (rec/draft Box)))
-    (is (= :recognitum/not-a-value (:error (err #(rec/draft (record/type-of Box))))))
-    (is (= :recognitum/not-a-value (:error (err #(rec/draft (record/type-of Ballot)))))))
+    (is (= :recognitum/not-a-value (:error (err #(rec/draft (types/type-of Box))))))
+    (is (= :recognitum/not-a-value (:error (err #(rec/draft (types/type-of Ballot)))))))
   (testing "a value among others in a batch"
     (is (= :recognitum/not-a-value
            (:error (err #(rec/check-all [(map->Ballot {::a 0 ::b 1}) Box] rec/every)))))))

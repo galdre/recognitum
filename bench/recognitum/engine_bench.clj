@@ -6,7 +6,8 @@
     clojure -M:bench -e \"(require 'recognitum.engine-bench)(recognitum.engine-bench/run)\""
   (:require
    [clojure.walk :as walk]
-   [recognitum.engine :as e]))
+   [recognitum.engine :as e]
+   [recognitum.engine.waves :as waves]))
 
 ;;; ------------------------------------------------------------- sources and checks
 
@@ -112,7 +113,7 @@
   "Prints µs per value and source calls per run for each engine and batch."
   []
   (let [eng (e/define (update-vals checks #(update % :body engine-body)))
-        lib (fn [vs] (e/run-all (mapv #(vector eng % #{}) vs)))
+        lib (fn [vs] (waves/run-all (mapv #(vector eng % #{}) vs)))
         naive (let [n (naive-define checks)] (fn [vs] (naive-run n vs)))]
     (assert (= (naive (values 200 1000)) (lib (values 200 1000))))
     (doseq [[label vs] [["1,000 values, keys under 10" (values 1000 10)]

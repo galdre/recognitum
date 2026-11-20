@@ -6,7 +6,8 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [recognitum.proof :as proof]
-   [recognitum.proof.key-class :as key-class]))
+   [recognitum.proof.key-class :as key-class]
+   [recognitum.proof.key-class.emit :as emit]))
 
 (definterface Prims
   (^int add [^int a ^long b ^double c ^boolean d ^char e])
@@ -835,11 +836,11 @@
           over (for [n (range 0 251)
                      :let [ks (mapv #(keyword (str "k" %)) (range n))]
                      unsealed? [false true]
-                     bytes (concat [((var-get #'key-class/value-class-bytes) t [] [] ks unsealed? nil)
-                                    ((var-get #'key-class/iter-bytes) t ks)
-                                    ((var-get #'key-class/maker-bytes) t unsealed?)
-                                    ((var-get #'key-class/draft-class-bytes) (str t "$Draft") t)]
-                                   (map #((var-get #'key-class/thunk-bytes) t %) (range (min n 1))))
+                     bytes (concat [((var-get #'emit/value-class-bytes) t [] [] ks unsealed? nil)
+                                    ((var-get #'emit/iter-bytes) t ks)
+                                    ((var-get #'emit/maker-bytes) t unsealed?)
+                                    ((var-get #'emit/draft-class-bytes) (str t "$Draft") t)]
+                                   (map #((var-get #'emit/thunk-bytes) t %) (range (min n 1))))
                      :let [parsed (clojure.lang.Reflector/invokeInstanceMethod parser "parse" (object-array [bytes]))]
                      m (.methods ^java.lang.classfile.ClassModel parsed)
                      :let [c (.orElse (.code ^java.lang.classfile.MethodModel m) nil)]

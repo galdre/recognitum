@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The library's internal namespaces were reorganized, with no change to the public API of
+  `recognitum.core` or to behavior.
+
 ## 0.3.1 (2026-11-20)
 
 In this section, a **displaced** definition is a definition of a type that a later definition

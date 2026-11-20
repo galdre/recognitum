@@ -656,7 +656,7 @@
 (deftest the-view-a-change-checks-reads-as-the-map-it-stands-for
   (let [t (with-meta (map->Tracked {::a 1 ::b 5 ::c 3}) {:m 1})
         removed (proof/removed key-class/strategy)
-        w (recognitum.record.Changed. t {::a 2 ::c removed} removed)
+        w (recognitum.record.views.Changed. t {::a 2 ::c removed} removed)
         m {::a 2 ::b 5}]
     (is (= m w))
     (is (= w m))

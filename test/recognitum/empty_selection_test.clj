@@ -8,7 +8,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [recognitum.core :as rec]
-   [recognitum.record]))
+   [recognitum.record.selection]))
 
 (rec/defconcern permission "Whether the actor may do the action.")
 (rec/defconcern audit "Checks an auditor reads.")
@@ -261,9 +261,9 @@
 (deftest whether-a-selection-selects-nothing-is-worked-out-once-per-type-test
   (testing "after the first seal by a selection, a seal, proves? or seal-all by it looks the answer up"
     (let [calls (atom 0)
-          selected @#'recognitum.record/selected
+          selected @#'recognitum.record.selection/selected
           vs (vec (repeatedly 100 #(map->Grant {::actor "a" ::action :read})))]
-      (with-redefs [recognitum.record/selected (fn [t s] (swap! calls inc) (selected t s))]
+      (with-redefs [recognitum.record.selection/selected (fn [t s] (swap! calls inc) (selected t s))]
         (doseq [sel [(rec/union permission audit) (rec/union ::actor ::allowed)]]
           (try (rec/seal (first vs) sel) (catch clojure.lang.ExceptionInfo _))
           (reset! calls 0)

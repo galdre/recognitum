@@ -35,9 +35,13 @@ The namespace is this one:
 ```clojure
 (ns internals.examples
   (:require [recognitum.engine :as engine]
+            [recognitum.engine.runner :as runner]
+            [recognitum.engine.waves :as waves]
             [recognitum.proof :as proof]
             [recognitum.proof.key-class :as key-class]
-            [recognitum.record :as record]))
+            [recognitum.record :as record]
+            [recognitum.record.types :as types]
+            [recognitum.record.values :as values]))
 ```
 
 ## The layers, and which may depend on which
@@ -49,15 +53,35 @@ depend on.
 | Layer | Namespace | Its work | It may depend on |
 |---|---|---|---|
 | The public API | `recognitum.core` | The macros and functions that a user calls. It chooses the proof strategy and the check engine, and hands both to the record layer. | Any namespace below. |
-| The record layer | `recognitum.define` | What the defining macros expand to. | `recognitum.body`, `recognitum.record`, `recognitum.select` |
-| | `recognitum.record` | Defines a type from compiled checks, and acts on the values and drafts of every type. | `recognitum.proof`, `recognitum.select` |
+| The record layer | `recognitum.define` | What `defproven` and `defproven-in` expand to. | `recognitum.body`, `recognitum.define.checks`, `recognitum.define.clauses`, `recognitum.define.methods`, `recognitum.record`, `recognitum.record.types`, `recognitum.record.values`, `recognitum.record.views` |
+| | `recognitum.define.checks` | A type's checks: its own clauses compiled and the checks its bundle bindings bring. | `recognitum.body`, `recognitum.define.bundles`, `recognitum.define.clauses`, `recognitum.define.methods`, `recognitum.record` |
+| | `recognitum.define.methods` | The sections of methods: protocols, interfaces, hints, and each method's function. | `recognitum.body`, `recognitum.define.clauses` |
+| | `recognitum.define.bundles` | What `defchecks`, `defcopy` and `defconcern` expand to, and the bundle values they build. | `recognitum.body`, `recognitum.define.clauses`, `recognitum.select` |
+| | `recognitum.define.clauses` | What a definition's symbols name, one clause of checks with its flags, and the refusals every defining form shares. | `recognitum.body`, `recognitum.record.probe` |
+| | `recognitum.record` | Defines a type from compiled checks: its type map, its write and its key's handle. | `recognitum.proof`, `recognitum.record.draft`, `recognitum.record.memory`, `recognitum.record.probe`, `recognitum.record.reports`, `recognitum.record.runs`, `recognitum.record.types`, `recognitum.record.values`, `recognitum.record.views`, `recognitum.select` |
+| | `recognitum.record.walk` | Seals, or opens as drafts, the values that a walk of a nested shape reaches. | `recognitum.proof`, `recognitum.record.draft`, `recognitum.record.reports`, `recognitum.record.runs`, `recognitum.record.selection`, `recognitum.record.types`, `recognitum.record.values`, `recognitum.select` |
+| | `recognitum.record.runs` | Runs the checks a selection names in one value or in many, in one run of the engine. | `recognitum.record.draft`, `recognitum.record.memory`, `recognitum.record.probe`, `recognitum.record.reports`, `recognitum.record.selection`, `recognitum.record.types`, `recognitum.record.values`, `recognitum.select` |
+| | `recognitum.record.selection` | What a selection asks of a type: the checks it selects with the presence checks of the required fields, and whether it selects nothing. | `recognitum.select` |
+| | `recognitum.record.values` | Makes, drafts, cleans and seals a value of any type through its type's write, and says what a value is known to pass. | `recognitum.proof`, `recognitum.record.draft`, `recognitum.record.memory`, `recognitum.record.reports`, `recognitum.record.selection`, `recognitum.record.types`, `recognitum.select` |
+| | `recognitum.record.views` | What a write's checks read in place of the map the write makes, and the forms of a type's guards. | `recognitum.proof` |
+| | `recognitum.record.draft` | The draft: an unchecked map that forgets, at each write, the checks that read a key written. | `recognitum.record.memory` |
+| | `recognitum.record.memory` | What a draft or a value of an unsealed type remembers, and the checks its memory shows passing. | `recognitum.proof` |
+| | `recognitum.record.types` | The type a value, a draft or a class belongs to, whether a definition is current, and how values and drafts print. | `recognitum.proof`, `recognitum.record.draft`, `recognitum.record.memory`, `recognitum.select` |
+| | `recognitum.record.probe` | Runs a type's checks on plain maps, with some sources answered by overrides. | `recognitum.proof`, `recognitum.record.draft`, `recognitum.record.reports`, `recognitum.record.selection`, `recognitum.record.types`, `recognitum.select` |
+| | `recognitum.record.reports` | The reports of a run of checks, and the record layer's refusals. | `recognitum.select` |
 | | `recognitum.body` | Reads one check body when a macro expands. | Nothing. |
 | | `recognitum.select` | Selections, and which checks a selection selects in a type. | Nothing. |
-| The check engine | `recognitum.engine` | Compiles check bodies and runs checks over a group of values. | `recognitum.engine.rewrite`, `recognitum.engine.runtime` |
+| The check engine | `recognitum.engine` | Compiles check bodies, and makes an engine from checks. | `recognitum.engine.rewrite`, `recognitum.engine.runner`, `recognitum.engine.runtime`, `recognitum.engine.step` |
+| | `recognitum.engine.waves` | Runs engines over a group of values, in waves. | `recognitum.engine.runtime`, `recognitum.engine.step` |
+| | `recognitum.engine.runner` | Runs some checks of an engine on one value at a time. | `recognitum.engine.runtime`, `recognitum.engine.step` |
+| | `recognitum.engine.step` | The engine, and one step of a check's body, which every run shares. | `recognitum.engine.runtime` |
 | | `recognitum.engine.rewrite` | Rewrites a body that reads a source into a form that can stop at a read and resume. | `recognitum.engine.runtime` |
 | | `recognitum.engine.runtime` | What a compiled body calls when it runs. | Nothing. |
 | The proof layer | `recognitum.proof` | The protocol between the record layer and a proof strategy. | Nothing. |
-| | `recognitum.proof.key-class` | The one proof strategy that the library has. | `recognitum.proof` |
+| | `recognitum.proof.key-class` | The one proof strategy that the library has. | `recognitum.proof`, `recognitum.proof.key-class.analysis`, `recognitum.proof.key-class.changes`, `recognitum.proof.key-class.emit` |
+| | `recognitum.proof.key-class.analysis` | What defining a definition takes, or why the strategy refuses it. | `recognitum.proof` |
+| | `recognitum.proof.key-class.changes` | What a value's changes call in place of its write: the net change as pairs, which holds no key. | Nothing. |
+| | `recognitum.proof.key-class.emit` | The bytecode of the classes the key-class strategy defines. | `recognitum.proof` |
 
 Three consequences of the table:
 
@@ -103,7 +127,8 @@ clojure -X:test :nses '[recognitum.layers-test]'
 layers:
 
 - `wiring` names the proof strategy (`recognitum.proof.key-class/strategy`) and three functions
-  of the engine: `recognitum.engine/define`, `run-all` and `runner`. The form that a defining
+  of the engine: `recognitum.engine/define`, `recognitum.engine.waves/run-all` and
+  `recognitum.engine.runner/runner`. The form that a defining
   macro emits passes this map to `recognitum.record/define-type`.
 - `expansion` holds what a defining macro needs while it expands: the engine's
   `recognitum.engine/body-form`, which compiles a check body; the macros that a body may call
@@ -111,9 +136,14 @@ layers:
   `rec/checks`, which starts a section of checks in a definition; and the strategy, which
   answers the name of a type's class and refuses a definition that it cannot make.
 
-Each defining macro of `recognitum.core` calls a function of `recognitum.define`. Most of the
-other public functions call the function of the same name in `recognitum.record`, and the
-selections are those of `recognitum.select`.
+Each defining macro of `recognitum.core` calls a function of `recognitum.define` (`defproven`,
+`defproven-in`) or of `recognitum.define.bundles` (`defchecks`, `defcopy`, `defconcern`). Most of the
+other public functions call the function of the same name in a child of `recognitum.record`:
+`recognitum.record.values` (`draft`, `clean`, `seal`, `sealed?`, `proves?`, `proven-checks`,
+`proven-concerns`, `checks-of`, `selects-nothing?`), `recognitum.record.runs` (`check`,
+`recheck`, `check-all`, `recheck-all`), `recognitum.record.probe` (`probe`, `probe-all`),
+`recognitum.record.draft` (`draft?`) and `recognitum.record.walk` (`seal-all`, `drafting-all`,
+`drafting`); and the selections are those of `recognitum.select`.
 
 Both maps are private. The library has no public way to choose another strategy or another
 engine: to use another one is to change this namespace.
@@ -128,8 +158,8 @@ rules in the form in which a user of `recognitum.core` meets them.
 
 The layer has three other namespaces. The first two work when a macro expands:
 
-- `recognitum.define` parses the form of each defining macro, refuses the mistakes that it can
-  see, and emits one form that calls `recognitum.record/define-type`.
+- `recognitum.define` and its children parse the form of each defining macro, refuse the
+  mistakes that they can see, and emit one form that calls `recognitum.record/define-type`.
 - `recognitum.body` expands the macros of one check body and finds what the body reads. It
   returns the body with each read written as the engine reads it: `(&field k)` for a field,
   `(&extant? k)` to ask whether a field is present, and `(&fetch source key)` and
@@ -151,8 +181,8 @@ this strategy and these functions. The aliases `key-class`, `engine` and `record
 (def wiring
   {:strategy key-class/strategy
    :define   engine/define
-   :run-all  engine/run-all
-   :runner   engine/runner})
+   :run-all  waves/run-all
+   :runner   runner/runner})
 ```
 
 `spec` names the type, its fields and its checks. A field has its key, the symbol that names
@@ -207,38 +237,38 @@ check reads. So `:above-absolute-zero` waits on `:celsius`, although its `:waits
 ;; => #{:celsius}
 ```
 
-`recognitum.record/make` is what `map->T` calls. It runs every check and returns a sealed
+`recognitum.record.values/make` is what `map->T` calls. It runs every check and returns a sealed
 value, or throws:
 
 ```clojure
-(def reading (record/make Reading {:station "north" :celsius 21.5}))
+(def reading (values/make Reading {:station "north" :celsius 21.5}))
 
-(record/sealed? reading)
+(values/sealed? reading)
 ;; => true
-(identical? Reading (record/type-of reading))
+(identical? Reading (types/type-of reading))
 ;; => true
-(record/make Reading {:station "north" :celsius 1 :wind 3})
+(values/make Reading {:station "north" :celsius 1 :wind 3})
 ;; ExceptionInfo: internals.examples/Reading has no field :wind. Its fields: :station :celsius :note
 ```
 
 A write to the value is checked, as a write to a value of a `rec/defproven` type is:
 
 ```clojure
-(record/sealed? (assoc reading :note "calm"))
+(values/sealed? (assoc reading :note "calm"))
 ;; => true
 (assoc reading :celsius "warm")
 ;; ExceptionInfo: internals.examples/Reading failed 1 check
 ;;   :celsius: false, which blocked :above-absolute-zero
 ```
 
-A draft is made from the type's class, which `recognitum.record/value-class` answers:
+A draft is made from the type's class, which `recognitum.record.values/value-class` answers:
 
 ```clojure
-(def draft (assoc (record/draft (record/value-class Reading)) :station "south" :celsius 3))
+(def draft (assoc (values/draft (values/value-class Reading)) :station "south" :celsius 3))
 
-(record/sealed? draft)
+(values/sealed? draft)
 ;; => false
-(record/sealed? (record/seal draft))
+(values/sealed? (values/seal draft))
 ;; => true
 ```
 
@@ -254,7 +284,7 @@ and code that calls `define-type` directly does without them or does them itself
   ;; => nil
   ```
 
-- It writes each source that a body reads as `(recognitum.record/sourced source)`. This is how
+- It writes each source that a body reads as `(recognitum.record.probe/sourced source)`. This is how
   an override of `rec/probe` answers in a source's place: a check that reads its source
   without `sourced` always reads the source itself.
 - It refuses, when the macro expands, a definition whose interfaces or methods the proof
@@ -277,7 +307,9 @@ values, drafts and constructors of the earlier definition.
 
 ## The check engine, and how it batches reads
 
-The docstring of `recognitum.engine` names four functions for a caller:
+The docstring of `recognitum.engine` names four functions for a caller: `body-form` and `define` of
+`recognitum.engine`, `run-all` of `recognitum.engine.waves` and `runner` of
+`recognitum.engine.runner`:
 
 - `(body-form body)` returns the form of a compiled check, as
   [Defining a type without the macros](#defining-a-type-without-the-macros) shows.
@@ -345,7 +377,7 @@ reads has two links.
     :approved {:after #{:sku}
                :body (compiled (true? (&fetch approved? (&fetch supplier-of (&field :sku)))))}}))
 
-(engine/run-all [[orders {:sku "tea"} #{}]
+(waves/run-all [[orders {:sku "tea"} #{}]
                  [orders {:sku "jam"} #{}]
                  [orders {:sku "tea"} #{}]])
 ;; => [{:failed {} :blocked #{}}
@@ -366,7 +398,7 @@ assumed calls no source:
 
 ```clojure
 (reset! calls [])
-(engine/run-all [[orders {:sku "tea"} #{:sku :supplied :approved}]])
+(waves/run-all [[orders {:sku "tea"} #{:sku :supplied :approved}]])
 ;; => [{:failed {} :blocked #{}}]
 @calls
 ;; => []
@@ -391,7 +423,7 @@ Where a check fails, each check that waits on it is **blocked**: it does not run
 result names it under `:blocked`.
 
 ```clojure
-(engine/run-all [[orders {} #{}]])
+(waves/run-all [[orders {} #{}]])
 ;; => [{:failed {:sku {:absent :sku}} :blocked #{:supplied :approved}}]
 ```
 
@@ -464,8 +496,8 @@ arity serves `assoc` and `dissoc`:
 
 The write also needs its three-argument arity. Once `recognitum.record` is loaded, printing a
 proven value calls the installed write with three arguments, to ask whether
-`recognitum.record/define-type` defined the value's type; `recognitum.record/type-of` and
-`recognitum.record/sealed?` do the same. This write answers `nil`, so the value prints as its
+`recognitum.record/define-type` defined the value's type; `recognitum.record.types/type-of` and
+`recognitum.record.values/sealed?` do the same. This write answers `nil`, so the value prints as its
 map. A write without the arity throws `ArityException` each time a value is printed:
 
 ```clojure
@@ -708,7 +740,7 @@ hold the code to them:
 | Layer | Its promises are stated in the docstrings of | Tests |
 |---|---|---|
 | The proof layer | `recognitum.proof`, and each method of its two protocols | `recognitum.key-class-test` |
-| The check engine | `recognitum.engine` and its four functions | `recognitum.engine-test` |
+| The check engine | `recognitum.engine` and its four functions, in it and its children | `recognitum.engine-test` |
 | The record layer | `recognitum.record` and its functions | The other namespaces under `test/recognitum`. Most of them call the layer through `recognitum.core`. |
 | The dependencies between the layers | `design/layers.edn` | `recognitum.layers-test` |
 

@@ -74,7 +74,7 @@
           (assoc info :forms (doall (take-while #(not= ::eof %) (repeatedly #(read opts r))))))))))
 
 (defn- class-ns
-  "The namespace a class symbol such as `recognitum.record.Draft` names, by its package."
+  "The namespace a class symbol such as `recognitum.record.draft.Draft` names, by its package."
   [s]
   (when-let [[_ pkg] (and (nil? (namespace s)) (re-matches #"(.+)\.[A-Z][^.]*" (name s)))]
     (symbol (str/replace pkg "_" "-"))))
