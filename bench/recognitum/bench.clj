@@ -2,7 +2,8 @@
   "A hand-rolled `defrecord` with the same validation against a `defproven` type, sharing one
   set of field predicates, and the rows that time one against the other. The invariant
   checks are written twice: the hand-rolled side reads its fields out of a map, the
-  library's are given the fields they name. No row fetches: a fetch would dominate every row.
+  library's are given the fields they name. The rows `:seal-all`, `:seal-all-alone` and
+  `:merge-sourced-wide` call a source, [[on-roster]], on both sides; no other row calls one.
 
   [[run]] prints the table.
 

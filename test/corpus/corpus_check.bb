@@ -8,7 +8,14 @@
 ;;            An entry with :tool :compiler is not expected from clj-kondo.
 ;;   :kondo   optional: overrides what clj-kondo is expected to report (as :report entries).
 ;;   :docs    optional: {var docstring ...}, each var's docstring, under clj-kondo's analysis
-;;            and at run time.
+;;            (with the warm cache) and at run time.
+;;   :kondo-docs optional: overrides :docs for clj-kondo's analysis; nil for no docstring.
+;;   :cache-from optional: [file ...]: the file is also linted alone, in a run of its own, with a
+;;            fresh cache that holds the library and these files; it then reports what :report
+;;            (or :kondo) says, and its vars have the docstrings :docs gives. So what the hook
+;;            learns of another namespace through the cache alone is tested.
+;;   :outline optional: [var ...], every var the file defines under clj-kondo's analysis (with
+;;            the warm cache), which an editor lists in the file's outline.
 ;;   :cold    :same, or entries: what clj-kondo reports when the file is linted
 ;;            alone with a fresh cache that holds only recognitum.core.
 ;;
@@ -37,12 +44,25 @@
         i (str/index-of text "expect")]
     (edn/read-string (subs text (+ i (count "expect"))))))
 
+(defn lint
+  "clj-kondo's output for paths, linted with cache, with its analysis when analysis? is true."
+  ([cache paths] (lint cache paths false))
+  ([cache paths analysis?]
+   (let [{:keys [out]} (apply shell {:dir root :out :string :continue true}
+                              "clj-kondo" "--cache-dir" (str cache) "--config-dir" config-dir
+                              "--config" (pr-str {:analysis analysis? :output {:format :edn}})
+                              "--lint" paths)]
+     (edn/read-string out))))
+
 (defn findings [cache paths]
-  (let [{:keys [out]} (apply shell {:dir root :out :string :continue true}
-                             "clj-kondo" "--cache-dir" (str cache) "--config-dir" config-dir
-                             "--config" "{:output {:format :edn}}"
-                             "--lint" paths)]
-    (group-by :filename (:findings (edn/read-string out)))))
+  (group-by :filename (:findings (lint cache paths))))
+
+(defn docs-of
+  "[var docstring] for each var of file f named in names, under the analysis in output."
+  [output f names]
+  (set (for [{:keys [name doc filename]} (:var-definitions (:analysis output))
+             :when (and (= f filename) (contains? names name))]
+         [name doc])))
 
 (defn as-set [fs]
   (set (for [{:keys [row col level message]} fs] [row col level message])))
@@ -52,17 +72,26 @@
              :when (not= tool :compiler)]
          [row col level kondo])))
 
-(def files (sort (map #(str (fs/relativize root %)) (fs/glob root "**.clj"))))
+(def files (sort (map #(str (fs/relativize root %)) (fs/glob root "**.{clj,cljc}"))))
+
+(def warm-cache (fs/create-temp-dir))
 
 (def warm
-  (let [cache (fs/create-temp-dir)]
-    (findings cache (into library ["usage" "mistakes" "extra"]))
-    (findings cache (into library ["usage" "mistakes" "extra"]))))
+  (do (findings warm-cache (into library ["usage" "mistakes" "extra"]))
+      (findings warm-cache (into library ["usage" "mistakes" "extra"]))))
 
 (defn cold [f]
   (let [cache (fs/create-temp-dir)]
     (findings cache library)
     (get (findings cache (conj library f)) f)))
+
+(defn cached
+  "clj-kondo's output, with its analysis, for f linted alone with a fresh cache that holds the
+  library and sources."
+  [f sources]
+  (let [cache (fs/create-temp-dir)]
+    (findings cache (into library sources))
+    (lint cache (conj library f) true)))
 
 (def failures (atom 0))
 
@@ -79,23 +108,31 @@
         want (expected (or (:kondo h) (:report h)))
         got-warm (as-set (get warm f))]
     (compare! "warm" f want got-warm)
-    (compare! "cold" f (if (= :same (:cold h)) want (expected (:cold h))) (as-set (cold f)))))
+    (compare! "cold" f (if (= :same (:cold h)) want (expected (:cold h))) (as-set (cold f)))
+    (when-let [sources (:cache-from h)]
+      (let [out (cached f sources)]
+        (compare! "cached" f want (as-set (filter #(= f (:filename %)) (:findings out))))
+        (when-let [docs (or (:kondo-docs h) (:docs h))]
+          (compare! "cached docs" f (set docs) (docs-of out f docs)))))))
+
+(def analysed
+  "clj-kondo's output, with its analysis, for the corpus linted with the warm cache."
+  (lint warm-cache ["usage" "mistakes" "extra"] true))
 
 (def var-definitions
   "clj-kondo's analysis of the vars the corpus defines, the hook's own included."
-  (let [{:keys [out]} (shell {:dir root :out :string :continue true}
-                             "clj-kondo" "--cache" "false" "--config-dir" config-dir
-                             "--config" "{:analysis true :output {:format :edn}}"
-                             "--lint" "usage" "mistakes" "extra")]
-    (:var-definitions (:analysis (edn/read-string out)))))
+  (:var-definitions (:analysis analysed)))
 
 (doseq [f files
-        :let [want (:docs (header f))]
+        :let [h (header f) want (or (:kondo-docs h) (:docs h))]
         :when want]
-  (compare! "docs" f (set want)
-            (set (for [{:keys [name doc filename]} var-definitions
-                       :when (and (= f filename) (contains? want name))]
-                   [name doc]))))
+  (compare! "docs" f (set want) (docs-of analysed f want)))
+
+(doseq [f files
+        :let [want (:outline (header f))]
+        :when want]
+  (compare! "outline" f (set want)
+            (set (for [{:keys [name filename]} var-definitions :when (= f filename)] name))))
 
 (def snake-vars
   "The vars whose names hold an underscore: a kebab-case rule of a user's linter reports each."

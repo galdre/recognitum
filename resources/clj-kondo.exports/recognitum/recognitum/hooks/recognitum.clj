@@ -4,9 +4,10 @@
   analyzes: names become vars or locals, fields become fn parameters, waits and
   concerns become symbol usages. Each check body is wrapped in a call of
   recognitum.core/checks, which the hook on rec/fetch, rec/fetch-each,
-  rec/extant? and rec/when-extant finds on the call stack. Bundle shapes and concerns travel between namespaces
-  as private marker vars, visible to other hooks through api/ns-analysis (the
-  cache) or, within one run, through `registry`.
+  rec/extant? and rec/when-extant finds on the call stack. Bundle shapes, which
+  bundle checks have a docstring, and concerns travel between namespaces as
+  private marker vars, visible to other hooks through api/ns-analysis (the cache)
+  or, within one run, through `registry`.
 
   A hook sees one form at a time. What a bundle's checks wait on is in its
   defchecks form, which records it in `registry` for this run; a bundle defined
@@ -48,6 +49,11 @@
 (defn- fresh "A pinned copy of a symbol node." [node] (tok (api/sexpr node)))
 (defn- at "A symbol token at node's location." [s node] (with-meta (api/token-node s) (meta node)))
 (defn- bare "node without its reader metadata." [node] (assoc node :meta nil))
+(defn- string-of
+  "A pinned string node whose value is s. A string node holds source text, so s is written
+  escaped, as a reader would read it."
+  [s]
+  (let [src (pr-str s)] (pinned (api/string-node (subs src 1 (dec (count src)))))))
 
 (defn- finding! [node type msg]
   (api/reg-finding! (assoc (meta node) :type type :message msg)))
@@ -66,17 +72,25 @@
 (def ^:private check-mark "--rec-check--")
 (def ^:private inputs-unknown "--rec-inputs-unknown")
 (def ^:private concern-mark "--rec-concern")
+(def ^:private doc-mark "--rec-doc--")
 
-(defonce ^{:doc "[ns name] -> {:inputs #{} :checks #{} :waits {}} for a bundle, with each
-  check's waits among the bundle's checks; {:concern true} for a
-  concern, {:check true} for a bundle check, {:checks-unknown true} for a copy written with no
-  map; filled in this run."}
+(defonce ^{:doc "[ns name] -> {:inputs #{} :checks #{} :waits {} :docs {} :documented #{}} for a
+  bundle, with each check's waits among the bundle's checks, the docstrings of the checks that
+  have one where the text is known, and the checks known to have one where it is not;
+  {:concern true} for a concern, {:check true} for a bundle check, {:checks-unknown true} for a
+  copy written with no map; filled in this run."}
   registry (atom {}))
 
-(defn- markers [bundle {:keys [inputs checks]}]
+(defn- documented
+  "The checks of a bundle's shape that have a docstring."
+  [{:keys [docs documented]}]
+  (into (set (keys docs)) documented))
+
+(defn- markers [bundle {:keys [inputs checks] :as shape}]
   (concat (when (nil? inputs) [(symbol (str bundle inputs-unknown))])
           (for [i inputs] (symbol (str bundle input-mark i)))
-          (for [c checks] (symbol (str bundle check-mark c)))))
+          (for [c checks] (symbol (str bundle check-mark c)))
+          (for [c (documented shape)] (symbol (str bundle doc-mark c)))))
 
 (defn- marker-defs [ms]
   (concat (for [m ms] (lst (tok 'defn-) (tok m) (vct []) (tok nil)))
@@ -91,7 +105,8 @@
                                  (symbol (subs s (count p)))))))
         shape {:inputs (when-not (names (symbol (str bundle inputs-unknown)))
                          (pick input-mark))
-               :checks (pick check-mark)}]
+               :checks (pick check-mark)
+               :documented (pick doc-mark)}]
     (when (or (seq (:inputs shape)) (seq (:checks shape))) shape)))
 
 (defn- bundle-shape
@@ -225,15 +240,22 @@
 
 ;; ----------------------------------------------------------- clause parse
 
+(defn- concern-symbol?
+  "Whether node is a symbol that names a concern this lint knows."
+  [node]
+  (boolean (when (sym node) (= :concern (some-> (resolved node) concern-status)))))
+
 (defn- clause-parts
   "(name [waits] flags? \"doc\"? body...): flags, a keyword, a symbol or a set of them written
   after the waits with more forms after it, is the clause's concerns and :override. With input?
-  true, the clause binds a bundle's input: a symbol there is its body."
+  true, the clause binds a bundle's input: a symbol there is its body, unless it names a concern."
   ([clause] (clause-parts clause false))
   ([clause input?]
    (let [[nm waits & more] (:children clause)
          x (first more)
-         flags (when (and (or (api/keyword-node? x) (= :set (api/tag x)) (and (not input?) (sym x))) (next more))
+         flags (when (and (or (api/keyword-node? x) (= :set (api/tag x))
+                              (and (sym x) (or (not input?) (concern-symbol? x))))
+                          (next more))
                  x)
          more (if flags (rest more) more)
          doc (when (and (api/string-node? (first more)) (next more)) (first more))]
@@ -265,27 +287,156 @@
 ;; test/corpus, which `clojure -X:test` does not run. After a change here, run
 ;; `bb test/corpus/corpus_check.bb`: it covers a concern written as a symbol, with an alias and
 ;; as a keyword.
+(def ^:private input-remedy
+  "an input clause takes no concern or :override; they go after a check's waits")
+
+(def ^:dynamic *lang*
+  "The language of the lint of the form at hand: :clj, or :cljs in a .cljc file's second pass."
+  nil)
+
+(defn- referred-elsewhere
+  "For ::c, written in namespace ns: the var {:ns :name} that c resolves to through the ns form,
+  where it is of another namespace and ns defines no concern c. The macros, which run on the
+  JVM, refuse such a keyword: it is a keyword of ns, and the var's id is of the var's
+  namespace."
+  [ns c]
+  (when (not= :cljs *lang*)
+    (let [r (api/resolve {:name c})]
+      (when (and r (:ns r) (not= ns (:ns r)) (not (:concern (get @registry [ns c]))))
+        r))))
+
+(defn- undeclared-concern!
+  "Report ::c on clause nm, where c resolves to r, a var of another namespace: the message gives
+  the concern's two right spellings, as the macros do where the lint knows r for a concern. A
+  var of clojure.core is no concern, and the message says so, as the macros do."
+  [k nm c {rns :ns rname :name :as r}]
+  (let [full (symbol (str rns) (str rname))
+        id (keyword (str rns) (str rname))]
+    (finding! k :recognitum/undeclared-concern
+              (if (= 'clojure.core rns)
+                (str "::" c " on " nm " names no concern that rec/defconcern defines")
+                (str "::" c " on " nm " is not the id of a concern: " c " here is "
+                     (if (= :concern (concern-status r))
+                       (str "the concern " full ", whose id is " id ". Write " c " or " id)
+                       (str full ", a var of another namespace, and a keyword flag is a concern's own id."
+                            " Where " full " is a concern, write " c " or " id)))))))
+
 (defn- concern-usages
   "::c and ::alias/c among a clause's flags become usages of the concern var, at the keyword;
   a symbol, c or alias/c, is a usage itself. One that names a var that no rec/defconcern defines
-  is reported; one that names nothing is clj-kondo's unresolved symbol or var. The usages are
-  read outside the scope of the fields and the checks' names, which a flag does not see."
+  is reported, and so is ::c where c is a var that the ns form refers from another namespace;
+  one that names nothing is clj-kondo's unresolved symbol or var. The usages are read outside
+  the scope of the fields and the checks' names, which a flag does not see."
   [ns clause]
   (for [k (:flags clause)
         :let [s (sym k)]
         :when (or s (and (api/keyword-node? k) (:namespaced? k)))
         :let [kw (:k k)
+              c (when-not s (symbol (name kw)))
               node (if s (bare k) (at (symbol (namespace kw) (name kw)) k))
+              elsewhere (when-not (or s (namespace kw)) (referred-elsewhere ns c))
               target (cond s (resolved k)
                            (namespace kw) (api/resolve {:name (api/sexpr node)})
-                           :else {:ns ns :name (symbol (name kw))})]]
-    (do (when (= :not-a-concern (some-> target concern-status))
-          (finding! k :recognitum/not-a-concern
-                    (str (api/sexpr node) " is not a concern: no rec/defconcern defines it")))
+                           :else {:ns ns :name c})]]
+    (do (cond elsewhere
+              (undeclared-concern! k (api/sexpr (:name clause)) c elsewhere)
+              (= :not-a-concern (some-> target concern-status))
+              (finding! k :recognitum/not-a-concern
+                        (str (api/sexpr node) " is not a concern: no rec/defconcern defines it")))
         node)))
 
-(def ^:private input-remedy
-  "an input clause takes no concern or :override; they go after a check's waits")
+(defn- full-keyword
+  "The keyword a keyword node reads as in namespace ns."
+  [ns node]
+  (let [kw (:k node)]
+    (cond (not (:namespaced? node)) kw
+          (namespace kw) (if-let [r (api/resolve {:name (symbol (namespace kw) (name kw))})]
+                           (keyword (str (:ns r)) (name kw))
+                           kw)
+          :else (keyword (str ns) (name kw)))))
+
+(defn- show-flag
+  "A flag node as the macros write it: a keyword of namespace ns as ::name, any other keyword
+  in full; a set with its members in the order of their text."
+  [ns node]
+  (cond (api/keyword-node? node)
+        (let [full (full-keyword ns node)]
+          (if (= (str ns) (namespace full)) (str "::" (name full)) (str full)))
+        (= :set (api/tag node)) (str "#{" (str/join " " (sort (map #(show-flag ns %) (:children node)))) "}")
+        :else (str node)))
+
+(defn- flag-node?
+  "Whether node reads only as a flag, where the lint can tell: a keyword, a symbol of a concern
+  the lint knows, or a set holding one of those."
+  [node]
+  (let [flag? #(or (api/keyword-node? %) (concern-symbol? %))]
+    (boolean (or (flag? node) (and (= :set (api/tag node)) (some flag? (:children node)))))))
+
+(defn- clause-head
+  "The head of clause nm as it should be written, up to its body: its waits, the flag nodes
+  flags (nils left out) in one place, and its docstring as \"...\" where doc is one."
+  [ns nm waits-node flags doc]
+  (let [fs (distinct (mapcat #(if (= :set (api/tag %)) (map (partial show-flag ns) (:children %)) [(show-flag ns %)])
+                             (remove nil? flags)))]
+    (str "(" nm " " waits-node " " (if (next fs) (str "#{" (str/join " " (sort fs)) "}") (first fs))
+         (when doc " \"...\""))))
+
+(defn- concern-id-node?
+  "Whether node is a keyword that is the id of a concern this lint knows."
+  [ns node]
+  (boolean (when (api/keyword-node? node)
+             (let [k (full-keyword ns node)]
+               (when (namespace k)
+                 (= :concern (concern-status {:ns (symbol (namespace k)) :name (symbol (name k))})))))))
+
+(defn- flag-alone!
+  "Report a check clause whose body is one form that is only a concern, where the lint can tell:
+  a concern's id or symbol it knows, or a set holding one, as the macros refuse it; and ::c, or
+  a set holding it, where c resolves to a concern of another namespace that the lint knows, as
+  the macros refuse ::c in the flags' place."
+  [ns {:keys [waits-node flags-node doc body] :as clause}]
+  (when-not (next body)
+    (let [x (first body)
+          nm (api/sexpr (:name clause))
+          one? #(or (concern-id-node? ns %) (concern-symbol? %))
+          not-id (fn [k] (when (and (api/keyword-node? k) (:namespaced? k) (not (namespace (:k k))))
+                           (let [c (symbol (name (:k k)))
+                                 r (referred-elsewhere ns c)]
+                             (when (and r (= :concern (concern-status r))) [k c r]))))
+          kids (if (= :set (api/tag x)) (:children x) [x])]
+      (cond
+        (some one? kids)
+        (finding! x :recognitum/misplaced-flag
+                  (str (show-flag ns x) ", the whole body of " nm ", is a flag, so " nm " has flags and no"
+                       " body: a concern after a clause's waits is one of its flags, and the body follows"
+                       " the flags, as in " (clause-head ns nm waits-node [flags-node x] doc) " body)"))
+        :else
+        (when-let [[k c r] (some not-id kids)]
+          (undeclared-concern! k nm c r))))))
+
+(defn- misplaced-flags!
+  "Report a clause whose body, the forms after its flags and docstring, holds before its last
+  form a form that reads only as a flag, as the macros refuse it: no flag is read there. With
+  bundle, the clause binds an input of that bundle."
+  [ns {:keys [name waits-node flags-node doc body]} bundle]
+  (let [before (butlast body)]
+    (when-let [found (seq (filter flag-node? before))]
+      (let [nm (api/sexpr name)
+            what (if bundle (str "input clause " nm " of " (api/sexpr bundle)) nm)
+            shown (map #(show-flag ns %) found)
+            listed (if (next shown) (str (str/join ", " (butlast shown)) " and " (last shown)) (first shown))
+            place (cond (not (identical? (first found) (first before))) (str "after other forms in the body of " what)
+                        doc (str "after the docstring of " what)
+                        flags-node (str "after " (show-flag ns flags-node) " on " what)
+                        :else (str "in the body of " what))
+            head (str (clause-head ns nm waits-node (cons flags-node found) doc) " ...)")]
+        (finding! (first found) :recognitum/misplaced-flag
+                  (str listed ", written " place ", " (if (next found) "are" "is")
+                       " in the body, where no flag is read: "
+                       (if bundle
+                         input-remedy
+                         (str "a clause's flags follow its waits, before its docstring, and several go"
+                              " in one set, as in " head))))))))
 
 (defn- misplaced-meta!
   "Report metadata written on node, the place named: a clause, its name or waits, or a
@@ -402,8 +553,8 @@
              (lst (tok 'def) nm doc sel)
              (lst (tok 'def) nm (apply lst (tok 'do) (remove nil? [doc sel]))))}))
 
-(defn defchecks [{:keys [node ns]}]
-  (binding [*pin* (pin-of node)] {:node (defchecks* node ns)}))
+(defn defchecks [{:keys [node ns lang]}]
+  (binding [*pin* (pin-of node) *lang* lang] {:node (defchecks* node ns)}))
 
 (defn- defchecks* [node ns]
   (let [[_ nm & more] (:children node)
@@ -415,11 +566,13 @@
         ins (set (map sym (:children inputs)))
         shape {:inputs ins
                :checks checks
-               :waits (into {} (for [c named] [(sym (:name c)) (set (filter checks (keep sym (:waits c))))]))}]
+               :waits (into {} (for [c named] [(sym (:name c)) (set (filter checks (keep sym (:waits c))))]))
+               :docs (into {} (for [c named :when (:doc c)] [(sym (:name c)) (api/sexpr (:doc c))]))}]
     (swap! registry assoc [ns (sym nm)] shape)
     (doseq [c (:checks shape)] (swap! registry assoc [ns c] {:check true}))
     (doseq [c clauses] (doseq [b (:body c)] (check-body! b #{} false false)))
     (doseq [c clauses] (clause-flags! c))
+    (doseq [c clauses] (misplaced-flags! ns c nil) (flag-alone! ns c))
     (doseq [c clauses :when (override? c)]
       (finding! (some #(when (= :override (:k %)) %) (:flags c)) :recognitum/clause-flag
                 (str ":override on " (api/sexpr (:name c)) ": a bundle's check replaces no check; :override is for a"
@@ -438,13 +591,24 @@
              (lst (tok 'fn) inputs
                   (vct (concat (map (comp in-body :body) clauses) (map fresh (:children inputs)))))]))))
 
+(defn- copied-def
+  "The def of v, a copied check, with doc, its docstring, or none. With none and documented?
+  true, it is marked so that clj-kondo does not report a missing docstring. It sits, zero
+  width, at v, so that the mark, and a warning, concern this check alone."
+  [v doc documented?]
+  (binding [*pin* (pin-of v)]
+    (cond-> (def-of v (some-> doc string-of))
+      (and documented? (not doc)) (vary-meta assoc :clj-kondo/ignore [:missing-docstring]))))
+
 (defn defcopy [{:keys [node ns]}]
   (binding [*pin* (pin-of node)] (defcopy* node ns)))
 
 (defn- defcopy*
   "(rec/defcopy new-name \"doc\"? bundle {check new-check ...}). Each new name is
   written in the source, so it navigates and renames as a var, and the copy needs no
-  sight of the bundle to define its vars."
+  sight of the bundle to define its vars. A new check has the docstring of the check it copies
+  when this run has seen its text; when the cache shows only that the check has one, the new
+  check is exempt from clj-kondo's missing-docstring linter, and has none."
   [node ns]
   (let [[_ nm & more] (:children node)
         [doc [bundle names & extra]] (doc-split more)]
@@ -461,7 +625,9 @@
             copy {:inputs (:inputs shape)              ; nil: not known
                   :checks (set (map (comp sym second) pairs))
                   :waits (into {} (for [[c ws] (:waits shape) :when (renames c)]
-                                    [(renames c) (set (keep renames ws))]))}
+                                    [(renames c) (set (keep renames ws))]))
+                  :docs (into {} (for [[c d] (:docs shape) :when (renames c)] [(renames c) d]))
+                  :documented (set (keep renames (documented shape)))}
             known? (fn [k] (or (nil? shape) (contains? (:checks shape) (sym k))))]
         (doseq [side [first second]
                 :let [nodes (map side pairs)]
@@ -485,10 +651,10 @@
                        [(vct (for [[k _] pairs :when (known? k)] ; old names: uses of the bundle's checks
                                (at (if bns (symbol bns (str (sym k))) (sym k)) k)))]
                        (for [v (vals (into {} (map (juxt (comp sym second) second)) (reverse pairs)))]
-                         (lst (tok 'def) v (tok nil)))))}))))
+                         (copied-def v (get (:docs copy) (sym v)) ((:documented copy) (sym v))))))}))))
 
-(defn defproven [{:keys [node ns]}]
-  (binding [*pin* (pin-of node)] {:node (defproven* node ns)}))
+(defn defproven [{:keys [node ns lang]}]
+  (binding [*pin* (pin-of node) *lang* lang] {:node (defproven* node ns)}))
 
 (defn- when-extant-field
   "The field named by ^{:when-extant field} on a bundle binding, checked against
@@ -661,12 +827,17 @@
                          (or (field-syms s) (resolved w)))]
         (finding! w :recognitum/unknown-wait
                   (str s " is not a check of this type"
-                       (when-let [{:keys [ns name]} (let [r (resolved w)]
-                                                      (when (:check (get @registry [(:ns r) (:name r)])) r))]
-                         (str ". A wait on a bundle's check is qualified: " (symbol (str ns) (str name))))))))
+                       (let [{:keys [ns name] :as r} (resolved w)
+                             e (when r (get @registry [ns name]))
+                             what (cond (:check e) "bundle's check"
+                                        (or (:checks e) (:checks-unknown e)) "bundle")]
+                         (when what
+                           (str ". A wait on a " what " is qualified: " (symbol (str ns) (str name)))))))))
     (doseq [c clauses] (doseq [b (:body c)] (check-body! b required false false)))
-    (doseq [c clauses] (clause-flags! c))
-    (doseq [{:keys [bundle clauses]} bundles, c clauses] (clause-flags! (input-parts c) bundle))
+    (doseq [c clauses] (clause-flags! c) (misplaced-flags! ns c nil) (flag-alone! ns c))
+    (doseq [{:keys [bundle clauses]} bundles, c clauses :let [p (input-parts c)]]
+      (clause-flags! p bundle)
+      (misplaced-flags! ns p bundle))
     (doseq [t (concat (keep :checks-token secs) (keep :protocol all-secs))]
       (misplaced-meta! t (str (api/sexpr t)) "name" false))
     (let [shape-check? #(contains? field-syms (sym (:name %)))

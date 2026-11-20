@@ -51,16 +51,20 @@
 
 ;;; The sinks: the functions whose effect depends on a potion's checks having passed. Each
 ;;; names the context it needs and gates on it, so a potion proven for one place is refused
-;;; in the other, and a plain map is refused everywhere. Coverage, the assurance that every
-;;; sink has its gate, comes from a test: demo-test hands every function here whose name ends
-;;; in `!` a potion without proof and expects a refusal.
+;;; in the other, and what is not a potion is refused everywhere. Coverage, the assurance that
+;;; every sink has its gate, comes from a test: demo-test hands every function here whose name
+;;; ends in `!` a potion without proof and a proven value of another type, and expects a refusal.
 
 (defn- gate
-  "Throws unless `potion` is proven against the context held by the var `context`."
+  "Throws unless `potion` is a Potion proven against the context held by the var `context`."
   [potion context sink]
-  (when-not (rec/proves? potion @context)
-    (throw (ex-info (str sink " takes only a potion proven " (:name (meta context)))
-                    {:error ::not-proven :sink sink :context (symbol context)}))))
+  (when-not (and (instance? Potion potion) (rec/proves? potion @context))
+    (throw (ex-info (str sink " takes only a potion proven " (:name (meta context)) ", not "
+                         (if (instance? Potion potion)
+                           "a potion without that proof"
+                           (str "a value of class " (pr-str (class potion)))))
+                    {:error ::not-proven :sink sink :context (symbol context)
+                     :handed (class potion)}))))
 
 (defonce till (atom []))
 (defonce royal-cup (atom nil))

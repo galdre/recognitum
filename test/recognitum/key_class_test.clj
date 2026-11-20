@@ -3,6 +3,7 @@
   methods call, and the definitions it refuses."
   (:require
    [clojure.edn :as edn]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [recognitum.proof :as proof]
    [recognitum.proof.key-class :as key-class]))
@@ -125,14 +126,51 @@
     (let [[vc] (proof/classes (proof/define-type key-class/strategy 'recognitum.key-class-test/Named-Thing {:interfaces [Plain]}))]
       (is (= (proof/class-name key-class/strategy 'recognitum.key-class-test/Named-Thing) (.getName ^Class vc))))))
 
-(deftest the-constructor-names-the-class-and-the-engine
-  (let [[vc] (proof/classes (proof/define-type key-class/strategy 'recognitum.key-class-test/Thing))
-        msg  (try (clojure.lang.Reflector/invokeConstructor vc (object-array [nil {}])) nil
-                  (catch SecurityException e (.getMessage e)))]
-    (is (= (str "recognitum.key_class_test.Thing's constructor takes a key only recognitum holds: "
-                "a value of this type is made only through recognitum")
-           msg))
-    (is (not (.contains ^String msg "map->")))))
+(defn- constructor-says
+  "What `h`'s value class's constructor says, called without the key."
+  [h]
+  (let [[^Class vc] (proof/classes h)
+        c (first (.getConstructors vc))]
+    (try (.newInstance c (object-array (.getParameterCount c))) nil
+         (catch java.lang.reflect.InvocationTargetException e
+           (let [cause (.getCause e)]
+             (is (instance? SecurityException cause))
+             (.getMessage cause))))))
+
+(deftest the-constructor-names-the-class-and-closes-with-the-words-handed-down
+  (let [opening "recognitum.key_class_test.Thing's constructor takes a key only recognitum holds: "
+        own     (str opening "a value of this type is made only through recognitum")
+        t       'recognitum.key-class-test/Thing]
+    (testing "without words, the strategy's own closing, which names no function"
+      (is (= own (constructor-says (proof/define-type key-class/strategy t))))
+      (is (= own (constructor-says (proof/define-type key-class/strategy t {:instead nil}))))
+      (is (not (.contains ^String own "map->"))))
+    (testing "with words, the same opening and the words"
+      (let [earlier (proof/define-type key-class/strategy t {:instead "call make-thing"})
+            unsealed (proof/define-type key-class/strategy 'recognitum.key-class-test/Other
+                       {:instead "call build-other" :unsealed true})]
+        (is (= (str opening "call make-thing") (constructor-says earlier)))
+        (is (= "recognitum.key_class_test.Other's constructor takes a key only recognitum holds: call build-other"
+               (constructor-says unsealed)))
+        (testing "and the class keeps them after the type is redefined"
+          (let [later (proof/define-type key-class/strategy t {:instead "call make-thing-2"})
+                bare  (proof/define-type key-class/strategy 'recognitum.key-class-test/Other {:unsealed true})]
+            (is (= (str opening "call make-thing") (constructor-says earlier)))
+            (is (= (str opening "call make-thing-2") (constructor-says later)))
+            (is (= "recognitum.key_class_test.Other's constructor takes a key only recognitum holds: call build-other"
+                   (constructor-says unsealed)))
+            (is (str/ends-with? (constructor-says bare) "a value of this type is made only through recognitum"))))))
+    (testing "words that are not a string, or too long to hold, are refused"
+      (is (= {:kind :malformed :message "refused definition: :instead is a string or nil: :seal-it"}
+             (proof/refusal key-class/strategy {:instead :seal-it})))
+      (is (some? (refusal' t {:instead (fn [] "make one")})))
+      (is (= :too-many-words (:kind (proof/refusal key-class/strategy {:instead (apply str (repeat 10001 \x))}))))
+      (is (nil? (proof/refusal key-class/strategy {:instead (apply str (repeat 10000 \u20ac))})))
+      (let [h (define {:instead (apply str (repeat 10000 \u20ac))})]
+        (is (str/ends-with? (constructor-says h) (apply str (repeat 10000 \u20ac)))
+            "the longest words fit in the class's constant, three bytes a character"))
+      (is (= "refused definition: :instead is a string or nil: 7" (refusal' t {:instead 7}))
+          "defining throws what refusal answers"))))
 
 (deftest default-methods
   (let [then #(.apply (.andThen ^java.util.function.Function % (reify java.util.function.Function (apply [_ r] r))) :x)]
@@ -797,7 +835,7 @@
           over (for [n (range 0 251)
                      :let [ks (mapv #(keyword (str "k" %)) (range n))]
                      unsealed? [false true]
-                     bytes (concat [((var-get #'key-class/value-class-bytes) t [] [] ks unsealed?)
+                     bytes (concat [((var-get #'key-class/value-class-bytes) t [] [] ks unsealed? nil)
                                     ((var-get #'key-class/iter-bytes) t ks)
                                     ((var-get #'key-class/maker-bytes) t unsealed?)
                                     ((var-get #'key-class/draft-class-bytes) (str t "$Draft") t)]

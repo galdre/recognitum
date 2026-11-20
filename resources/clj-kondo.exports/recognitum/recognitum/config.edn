@@ -28,4 +28,6 @@
            :recognitum/wait-cycle           {:level :error}
            :recognitum/checks-after-protocol {:level :error}
            :recognitum/misplaced-meta       {:level :error}
-           :recognitum/clause-flag          {:level :error}}}
+           :recognitum/clause-flag          {:level :error}
+           :recognitum/misplaced-flag       {:level :error}
+           :recognitum/undeclared-concern   {:level :error}}}

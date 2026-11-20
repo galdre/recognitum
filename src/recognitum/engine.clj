@@ -274,7 +274,11 @@
             ^HashMap answers (.-answers s)
             ks (clojure.lang.LazilyPersistentVector/createOwning (.toArray wave))
             _ (.clear wave)
-            ans (try ((.-src s) ks) (catch Exception e e))]
+            ans (try ((.-src s) ks)
+                     (catch Exception e
+                       ;; the throw cleared the flag, and the run goes on as a failed read
+                       (when (instance? InterruptedException e) (.interrupt (Thread/currentThread)))
+                       e))]
         (dotimes [j (count ks)]
           (let [x (nth ks j)]
             (.put answers x (if (instance? Throwable ans) ans (get ans x)))))))))

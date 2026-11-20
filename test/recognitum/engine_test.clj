@@ -209,3 +209,21 @@
     (is (thrown? ArithmeticException ((e/runner eng [:a]) {:k 0} #{})) "a runner of one check too")
     (is (true? (binding [*dyn* :caller] (empty? (:failed ((e/runner eng [:b]) {} nil))))))
     (is (= {:failed {} :blocked #{}} (binding [*dyn* :caller] (r {:k 1} #{}))) "and sees the caller's bindings")))
+
+(deftest a-runner-of-one-check-catches-a-signal-from-the-body-and-none-from-after-it
+  (let [signal (ex-info "after" {:recognitum.checks/absent :late})
+        eng (engine {:p {:after #{} :body '{:p (&field :k)}}
+                     :r {:after #{} :body '(if (int? (&field :k)) {:r 1} (&fetch same-src 1))}
+                     :f {:after #{} :body (fn [v] {:f (:k v)})}
+                     :s {:after #{} :body '(throw (ex-info "absent" {:recognitum.checks/absent :k}))}})]
+    (is (= {:failed {:s {:absent :k}} :blocked #{}} ((e/runner eng [:s]) {} nil))
+        "a signal from the body is the check's failure")
+    (doseq [id [:p :r :f]]
+      (is (= :made-after (with-redefs [e/answer-one (fn [_ _ _] :made-after)]
+                           ((e/runner eng [id]) {:k 1} nil)))
+          "the answer to a body that fails is made after the body")
+      (is (identical? signal
+                      (with-redefs [e/answer-one (fn [_ _ _] (throw signal))]
+                        (try ((e/runner eng [id]) {:k 1} nil) nil
+                             (catch clojure.lang.ExceptionInfo x x))))
+          (str id ": the same signal thrown there passes through")))))

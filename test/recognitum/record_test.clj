@@ -725,3 +725,45 @@
         (doseq [j others]
           (is (= :recognitum/check-failed (:error (err #(merge old {(k 2) 102 (k j) :x})))) (str "k" j))
           (is (= :recognitum/check-failed (:error (err #(merge old {(k 2) 102 (k 3) 103 (k j) :x})))) (str "k" j)))))))
+
+(defn- constructor-says
+  "What the public constructor of class `c` says, called without the key."
+  [^Class c]
+  (let [k (first (.getConstructors c))]
+    (try (.newInstance k (object-array (.getParameterCount k))) nil
+         (catch java.lang.reflect.InvocationTargetException e
+           (let [cause (.getCause e)]
+             (is (instance? SecurityException cause))
+             (.getMessage cause))))))
+
+(defn- define-in
+  "Evaluates `form` in the namespace named `ns-sym`, made where it does not exist, and returns
+  the class the form imported under `tname`."
+  [ns-sym tname form]
+  (let [ns' (create-ns ns-sym)]
+    (binding [*ns* ns'] (refer-clojure) (eval form))
+    (ns-resolve ns' tname)))
+
+(deftest the-class-constructor-names-the-functions-that-make-a-value
+  (testing "a type of rec/defproven"
+    (is (= "probe.c.Heist's constructor takes a key only recognitum holds: make a value with probe.c/map->Heist or probe.c/->Heist"
+           (constructor-says (define-in 'probe.c 'Heist '(recognitum.core/defproven Heist [take] recognitum.core/checks (take [] (int? take))))))))
+  (testing "a type of rec/defproven-in"
+    (is (= (str "recognitum.record_test.unsealed.Plan's constructor takes a key only recognitum holds:"
+                " make a value with recognitum.record-test.unsealed/map->Plan or recognitum.record-test.unsealed/->Plan")
+           (constructor-says (define-in 'recognitum.record-test.unsealed 'Plan
+                               '(recognitum.core/defproven-in Plan [a] recognitum.core/checks (a [] (int? a))))))))
+  (testing "the functions it names make a value"
+    (is (rec/sealed? ((ns-resolve 'probe.c 'map->Heist) {:probe.c/take 1})))
+    (is (rec/sealed? ((ns-resolve 'probe.c '->Heist) 1))))
+  (testing "a type defined again: the earlier class keeps its words"
+    (let [form    '(recognitum.core/defproven R [a] recognitum.core/checks (a [] (int? a)))
+          earlier (define-in 'recognitum.record-test.again 'R form)
+          later   (define-in 'recognitum.record-test.again 'R form)
+          moved   (define-in 'recognitum.record-test.moved 'R form)
+          words   "recognitum.record_test.again.R's constructor takes a key only recognitum holds: make a value with recognitum.record-test.again/map->R or recognitum.record-test.again/->R"]
+      (is (not (identical? earlier later)))
+      (is (= words (constructor-says earlier) (constructor-says later)))
+      (is (= (str "recognitum.record_test.moved.R's constructor takes a key only recognitum holds:"
+                  " make a value with recognitum.record-test.moved/map->R or recognitum.record-test.moved/->R")
+             (constructor-says moved))))))

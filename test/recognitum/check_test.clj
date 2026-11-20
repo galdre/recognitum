@@ -110,8 +110,9 @@
              (rec/check-all [d] rec/every)))
       (is (= #{::a} (rec/proven-checks d))))))
 
-(deftest check-all-runs-the-checks-of-a-displaced-value
-  ;; A value of an earlier definition passes nothing, so check-all runs its definition's checks.
+(deftest check-all-refuses-a-displaced-value-and-runs-nothing
+  ;; A value of an earlier definition proves nothing, and check-all refuses it, as a write does,
+  ;; running no check of that definition or of the current one.
   (let [ns' (create-ns 'recognitum.check-test.displaced)
         ran (atom 0)
         _ (intern ns' 'ran ran)
@@ -122,10 +123,10 @@
         old ((ns-resolve ns' 'map->R) {:recognitum.check-test.displaced/a 1})]
     (define)
     (reset! ran 0)
-    (let [rs (rec/check-all [old] rec/every)]
-      (is (vector? rs))
-      (is (= [true] rs)))
-    (is (= 1 @ran))))
+    (is (= :recognitum/displaced
+           (:error (try (rec/check-all [old] rec/every) nil
+                        (catch clojure.lang.ExceptionInfo e (ex-data e))))))
+    (is (zero? @ran))))
 
 (deftest check-all-runs-nothing-on-sealed-values
   (let [runs (atom 0)

@@ -2,10 +2,11 @@
   "Types whose values carry proof that their checks passed.
 
   [[defproven]] defines a type from its fields and named checks. Its constructors run every
-  check or throw, and so does every write to one of its values, so holding a value of the type
-  is holding proof that the checks passed: [[sealed?]] is the whole test, and `instance?` gives
-  the same answer until the type is redefined. A **draft** is an unchecked map of a type, for
-  values built in steps; [[seal]] checks it and returns the value.
+  check or throw, and every write to one of its values runs the checks that read a key the
+  write changes, or throws, so holding a value of the type is holding proof that the checks
+  passed: [[sealed?]] is the whole test, and `instance?` gives the same answer until the type
+  is redefined. A **draft** is an unchecked map of a type, for values built in steps; [[seal]]
+  checks it and returns the value.
 
   [[defproven-in]] defines a type whose values are made and written without checks, and carry
   in place the checks that passed on them: proof is asked with [[proves?]], never `instance?`.
@@ -21,28 +22,30 @@
     and runs only once they have passed.
   - A **bundle** ([[defchecks]]) is a group of checks over named inputs, bound into a type by
     saying which field each input reads. [[defcopy]] copies one under new names.
-  - A **concern** ([[defconcern]]) marks checks so that a selection can name them together.
-  - A **selection** names some of a type's checks: a check id, a concern, a bundle, a bundle's
+  - A **concern** ([[defconcern]]) marks checks so that a selection can select them together.
+  - A **selection** selects some of a type's checks: a check id, a concern, a bundle, a bundle's
     check, or [[every]], [[shape]], [[pure]], [[fetching]], [[reading]], [[except]] and
     [[union]].
   - A **source** is a function from a vector of distinct keys to a map from key to answer.
     Check bodies read one with [[fetch]] and [[fetch-each]].
-  - A field not marked `^:optional` is required, and its presence is a check of its own, part of
-    its shape, with no name: a selection selects it as any shape check of the field that reads
-    no source, every check that reads the field waits on it, a seal fails without it, and
-    [[proves?]] is false while it is absent.
+  - A field not marked `^:optional` is **required**. Its presence is a check of its own, with
+    no name, part of the field's shape: a selection selects it as it selects a shape check that
+    reads only that field and no source, a seal fails where the field is absent, and
+    [[proves?]] is false while the field is absent. Every check that reads the field waits on
+    its presence check, and this one wait never keeps a check from running.
 
   The public API:
 
   - Define: [[defproven]], [[defproven-in]], [[defchecks]], [[defcopy]], [[defconcern]],
     [[defcontext]], [[checks]].
   - Inside a check body: [[fetch]], [[fetch-each]], [[extant?]], [[when-extant]].
+  - Select: [[every]], [[shape]], [[pure]], [[fetching]], [[reading]], [[except]], [[union]].
   - Build values: `map->T`, `->T` and the tagged literal `#ns/T {...}`, each generated per
     type; [[draft]], [[clean]], [[seal]], [[seal-all]], [[drafting]], [[drafting-all]].
   - Run checks: [[check]], [[recheck]], [[check-all]], [[recheck-all]].
   - Ask of plain data: [[probe]], [[probe-all]].
-  - Ask: [[proves?]], [[proven-checks]], [[proven-concerns]], [[checks-of]], [[sealed?]],
-    [[draft?]], [[data-readers]]."
+  - Ask: [[proves?]], [[proven-checks]], [[proven-concerns]], [[checks-of]], [[selects-nothing?]],
+    [[sealed?]], [[draft?]], [[data-readers]]."
   (:require
    [recognitum.body :as body]
    [recognitum.define :as define]
@@ -74,8 +77,8 @@
 ;;; ------------------------------------------------------------------ definitions
 
 (defmacro defproven
-  "Defines the type `T`: its class, imported into this namespace, and `map->T` and `->T`,
-  which run every check and return a value or throw.
+  "Defines the type `T`: its class, imported into this namespace, and the constructors `map->T`
+  and `->T`, which run every check and return a value or throw.
 
       (rec/defproven Heist [name crew take cuts ^:optional getaway]
         rec/checks
@@ -83,29 +86,75 @@
         (cuts-sum-to-take [] (= take (reduce + (vals cuts))))
         (only-crew-get-cuts [cuts-sum-to-take] (every? crew (keys cuts))))
 
+  The fields:
+
   Each field's key is a keyword in this namespace named after it. A field marked
-  `^:optional` may be absent; every other field must be present.
+  `^:optional` may be absent; every other field must be present. A field that holds nil is
+  present. `map->T` takes a map from field keys to values, and `->T` takes every field, in
+  order. A type has at most 250 fields; a definition with more is refused.
 
-  Sections follow the fields. `rec/checks` starts the type's own clauses, each
-  `(name [waits] \"doc\"? body...)`. A bundle var starts a binding of that bundle: one
-  `(input [] body)` clause per input of the bundle, each body an expression of the fields.
-  `^{:when-extant field}` on the bundle var skips the binding's checks, as passing, where
-  that optional field is absent.
+  The sections:
 
-  In a body the fields are locals. A read of an absent field throws, which fails the check;
-  [[extant?]] and [[when-extant]] ask first. A failed read from a source throws too, and fails
-  the check. A body may catch either. Anything else a body throws propagates out of the call
-  that ran the check.
+  Sections follow the fields: first the checks sections, in any order, then the method
+  sections. A checks section is `rec/checks`, at most once, or the binding of a bundle.
 
-  A check waits on the shape check of each field its body reads, directly or through an
-  input. A wait names any other check it waits on: an own check by its bare name, a bundle's
-  check by its qualified var, or every check of a bundle by the bundle's qualified var, even
-  where the bundle is defined in this namespace. A keyword, a symbol or a set of them after
-  the waits, with more forms after it, is the clause's flags: `(c [waits] concern body)` or
-  `(c [waits] ::concern body)` carries the concern that [[defconcern]] defined, a symbol there
-  that names no concern is refused, and `(bundle-ns/check [waits] :override body)` replaces
-  that check of a bound bundle, keeping its id, its concerns and its binding's
-  `:when-extant`. Metadata on a clause, its name, its waits or a section's head is refused.
+  A clause of `rec/checks`:
+
+  `rec/checks` starts the type's own clauses, each `(name [waits] flags? \"doc\"? body...)`.
+  A clause defines the check whose id is `::name`. The check passes when its body returns
+  exactly `true`; anything else the body returns is the check's failure data. A check named
+  after a field is that field's shape check, and the shape check of an optional field passes
+  where the field is absent.
+
+  Waits:
+
+  A check runs only once every check it waits on has passed; where one of them fails, the
+  check does not run, and a report names it as blocked. A check waits on the shape check of
+  each field its body reads or asks with [[extant?]], directly or through an input. A wait
+  names any other check it waits on: an own check by its bare name, a bundle's check by its
+  qualified var, or every check of a bundle by the bundle's qualified var, even where the
+  bundle is defined in this namespace. Waits that form a cycle are refused.
+
+  Flags:
+
+  A keyword, a symbol or a set of them right after the waits, with more forms after it, is
+  the clause's flags: the concerns the check carries, and `:override`. A concern is written
+  as the symbol of the var [[defconcern]] defined or as the concern's id, and several flags
+  go in one set: `(c [waits] concern body)`, `(c [waits] #{concern ::other} \"doc\" body)`.
+  `(bundle-ns/check [waits] :override body)` replaces that check of a bound bundle with a
+  body over the type's fields, keeping its id, its concerns and its binding's `:when-extant`.
+
+  Refused in a clause:
+
+  - a symbol in the flags' place that names no concern;
+  - a keyword there that is neither `:override` nor a concern's id;
+  - a set there that holds anything but keywords and symbols, such as `#{42}`;
+  - a keyword, a concern's symbol or a set holding either, written later in the clause and
+    before the body's last form, where no flag is read;
+  - a check whose whole body is a concern, since that check has flags and no body;
+  - metadata on a clause, its name or its waits. Metadata on a section's head is refused
+    too, except `^{:when-extant field}` on a bundle var.
+
+  A body:
+
+  In a body the fields are locals. A read of an absent field throws, which fails the check
+  with the failure data `{:absent key}`, where `key` is the field's key; [[extant?]] and
+  [[when-extant]] ask first. A failed read from a source throws too, and fails the check with
+  `{:fetch-failed source :cause e}`, as [[fetch]] describes. A body may catch either.
+  Anything else a body throws propagates out of the call that ran the check. A method of a
+  `deftype` that a body defines may not name a field.
+
+  The binding of a bundle:
+
+  A bundle var starts a binding of that bundle: one `(input [] body)` clause per input of the
+  bundle, each body an expression of the fields that reads no source. An input clause runs
+  when a check that reads its input runs, once for each such check. Where the clause reads
+  an absent field, the input is absent, and a read of the input fails the bundle's check with
+  `{:absent :input}`, where `:input` is the input's name as a keyword. `^{:when-extant field}`
+  on the bundle var skips the binding's checks, as passing, while that optional field is
+  absent; a write that adds the field runs them.
+
+  The method sections:
 
   After the checks sections come the type's own protocols and interfaces, mixed, written as
   in `defrecord`: a protocol or an interface, then its methods, each `(method [this args*]
@@ -114,23 +163,63 @@
   type hint. A method body may not call `map->T` or `->T`. Sealed values are instances of
   each interface and each protocol's interface, so a direct call of a method dispatches on
   the class; drafts are not. Type hints on the parameters choose among an interface's methods
-  of one arity. Refused: a checks section after a method section, a method no interface of
-  the section declares, a method more than one matches, `equals`, `hashCode`, and what the
-  proof strategy refuses, such as a protocol method a map already has.
+  of one arity. A call of a method that a section's protocol or interface declares and the
+  section does not give throws `UnsupportedOperationException`. Where a value already has
+  that method as a map, the call gives the map's answer instead, or throws
+  `AbstractMethodError` where the two methods' return types differ.
+
+  Refused in a method section:
+
+  - a checks section after a method section;
+  - a head that is a class and not an interface, and a protocol or an interface that heads
+    two sections;
+  - a method no interface of the section declares, a method more than one matches, and a
+    method written twice with the same number of parameters;
+  - `equals` and `hashCode`;
+  - a method that a value already has as a map, such as `count` with no argument;
+  - the interfaces `java.util.function.Predicate` and `java.util.function.BiConsumer`;
+  - interfaces that clash with each other or with a map's: two that give default bodies of
+    one method that the section does not give, two whose methods differ only in return type,
+    and one whose `print-method` entry Clojure prefers to a map's.
+
+  A definition that fails:
 
   The definition is one form: it defines at the top level and inside another form alike.
-  Where a check or a method does not compile, or a section is refused, the definition is
-  refused and leaves nothing: no class, no constructor, no var, and an earlier definition of
-  `T` stays current.
+  Where a check or a method does not compile, or a section is refused, the definition fails
+  and leaves nothing: no class, no constructor, no var, and an earlier definition of `T`
+  stays current. A definition whose name already names a var or another class in this
+  namespace is refused in the same way. A refusal is an ex-info whose `:error` is
+  `:recognitum/refused`; where the form is refused as it expands, that ex-info is the cause
+  of the compiler's exception. Where it is the compiler that rejects a body, as for a method
+  that calls an unknown function, the compiler's exception has no such cause.
 
-  The shape check of an optional field passes where the field is absent. The tagged literal
-  `#ns/T {...}` calls `map->T` once `ns/T` maps to it in `data_readers.cljc`.
+  Values and writes:
 
-  Evaluating the form again redefines `T` and displaces the earlier definition. Its values
-  stay values of the earlier class, and they are not sealed: [[sealed?]] answers false, and a
-  write that changes one, or a method of its protocols or interfaces other than `toString`
-  called with one, throws, with `:error` `:recognitum/displaced`. A write that changes nothing may return the value unchanged.
-  `(rec/seal (rec/draft v))` proves such a value under the current definition."
+  A value reads, compares and hashes as a map of its entries. It prints as the tagged
+  literal `#ns/T {...}`, which calls `map->T` once `ns/T` maps to it in `data_readers.cljc`.
+  A write to a value (`assoc`, `dissoc`, `conj`, `merge`, `into`) runs the checks that read a
+  key the write changes, and returns a new value or throws. One `into`, one `conj` of a map
+  and a `merge` of one map each write their keys together, as one write checked on its
+  result; `assoc` of several keys writes them one at a time. A constructor or a write that
+  fails throws ex-info with the data [[seal]] describes: `:error` is
+  `:recognitum/undeclared-keys`, before any check runs, for a key the type does not declare,
+  or `:recognitum/check-failed` where a check fails or a required field is absent. `empty` of
+  a value throws, and so does the class's own constructor, `(T. ...)`.
+
+  Redefinition:
+
+  Evaluating the form again redefines `T` and displaces the earlier definition; it does so
+  also where the name was unmapped, or its namespace removed and loaded again, in between.
+  Values of the displaced definition stay values of its class, and they are not sealed:
+  [[sealed?]] answers false, and a write that changes one, or a method of its protocols or
+  interfaces other than `toString` called with one, throws, with `:error`
+  `:recognitum/displaced`. [[check]], [[recheck]], [[check-all]], [[recheck-all]] and [[seal]]
+  given one throw the same, and [[seal-all]] lists it among its failures with that `:error`.
+  A write that changes nothing may return the value unchanged. A
+  method of a protocol extended to the class from outside, as with `extend-protocol`, still
+  answers for such a value. A constructor held from before the redefinition throws, with
+  `:error` `:recognitum/displaced-constructor`. `(rec/seal (rec/draft v))` proves a value of
+  a displaced definition under the current definition."
   {:arglists '([T [fields*] sections* method-sections*])
    :style/indent [2 nil nil [:defn]]}
   [tname fields & sections]
@@ -140,8 +229,9 @@
 (defmacro defproven-in
   "Defines the type `T` as [[defproven]] does, from the same form, except that nothing runs
   its checks but a call that asks to: `map->T`, `->T` and the tagged literal check nothing, and
-  a write (`assoc`, `dissoc`, `merge`, `conj`, `into`) checks nothing. A key the type does not
-  declare is refused at the write, as on a [[defproven]] value.
+  a write (`assoc`, `dissoc`, `merge`, `conj`, `into`) checks nothing. A value may therefore
+  lack a required field. A constructor or a write given a key the type does not declare still
+  throws ex-info whose `:error` is `:recognitum/undeclared-keys`, as for a [[defproven]] type.
 
       (rec/defproven-in Ballot [choice ^:optional round]
         rec/checks
@@ -149,20 +239,24 @@
         (round-positive [] (rec/when-extant round (pos? round))))
 
   A value carries, in place, the checks that passed on its entries, and every holder sees what
-  a run writes there: [[seal]], [[check]], [[recheck]], [[check-all]] and [[recheck-all]] run
-  checks on it and remember what passed and forget what failed. A write returns a new value
-  remembering what the old one passed, less the checks that read a key it changes; a write of
-  the very object a key holds changes nothing.
+  a run writes there: [[check]], [[recheck]], [[check-all]], [[recheck-all]], [[seal]] and
+  [[seal-all]] run checks on it and remember what passed and forget what failed. A write
+  returns a new value remembering what the old one passed, less the checks that read a key it
+  changes; a write of the very object a key holds changes nothing.
 
   A value is never sealed: [[sealed?]] answers false, and code that needs proof asks
   [[proves?]]. Every value implements the type's protocols and interfaces, whatever it has
-  passed. The type has no drafts: [[draft]], [[clean]] and [[drafting]] refuse its class and its
-  values. [[seal-all]] enters a value as it enters a draft, and [[drafting-all]] leaves it as it
-  is.
+  passed. The type has no drafts: [[draft]] given its class, and [[draft]], [[clean]] and
+  [[drafting]] given one of its values, throw ex-info whose `:error` is
+  `:recognitum/no-drafts`. [[seal-all]] enters a value as it enters a draft, and
+  [[drafting-all]] leaves it as it is.
 
-  Evaluating the form again redefines `T`. A value of the earlier definition reads as before
-  and proves nothing; a write that changes it, a method other than `toString`, and every run of
-  checks on it throw, naming the current `map->T`."
+  Evaluating the form again redefines `T` and displaces the earlier definition. A value of the
+  displaced definition reads as before and proves nothing; a write that changes it, a method
+  other than `toString` called with it, and [[check]], [[recheck]], [[check-all]],
+  [[recheck-all]] and [[seal]] given it throw ex-info whose `:error` is
+  `:recognitum/displaced` and whose message names the current `map->T`. [[seal-all]] lists it
+  among its failures with that `:error`."
   {:arglists '([T [fields*] sections* method-sections*])
    :style/indent [2 nil nil [:defn]]}
   [tname fields & sections]
@@ -180,9 +274,14 @@
         (box-exists [] (some? (rec/fetch db/ballot-boxes ballot-box-id)))
         (may-cast [box-exists] (db/can-cast? voter ballot-box-id)))
 
-  Clauses are those of [[defproven]], with the inputs in place of fields, and none takes
-  `:override`. Each check's id is a
-  keyword in this namespace. Every input may be absent in a type that binds the bundle."
+  A clause is written as an own clause of [[defproven]] is, with the inputs in place of the
+  fields: in a body the inputs are locals, and [[extant?]] and [[when-extant]] take an input.
+  A clause's name is a plain symbol, its waits name only checks of this bundle, by their bare
+  names, and no clause takes `:override`. Each check's id is a keyword in this namespace.
+
+  A type binds the bundle with one clause per input, as [[defproven]] describes. Every input
+  may be absent in such a type: a read of an absent input fails the check with the failure
+  data `{:absent :input}`, where `:input` is the input's name as a keyword."
   {:arglists '([name doc-string? [inputs*] rec/checks clauses*])
    :style/indent [:defn [:defn]]}
   [bname & args]
@@ -192,8 +291,9 @@
 (defmacro defcopy
   "Defines `new-name`, a copy of `bundle` whose checks are renamed by `names`, a map from each
   check of the bundle to its new name, which names every check exactly once. The copy's var has
-  the docstring `doc-string` if one is given. The copy's ids are keywords in this namespace; its
-  checks keep their concerns and their docstrings."
+  the docstring `doc-string` if one is given, and each renamed check gets a var, as under
+  [[defchecks]]. The copy's ids are keywords in this namespace; its checks keep their concerns
+  and their docstrings."
   {:arglists '([new-name doc-string? bundle names])
    :style/indent :defn}
   [new-name & args]
@@ -201,14 +301,22 @@
 
 (defmacro defcontext
   "Defines `name` as a context: a var holding the selection `sel`, with the docstring `doc`. A
-  context means nothing beyond its selection: every op given it answers as given `sel`."
+  context means nothing beyond its selection: every function that takes a selection answers
+  for the context as it answers for `sel`."
   {:style/indent :defn}
   [name doc sel]
   `(def ~(vary-meta name assoc :doc doc) ~sel))
 
 (defmacro defconcern
-  "Defines the concern `name`: a clause with `name` or `::name` after its waits carries it,
-  and a selection names its checks by the var or by the keyword `::name`."
+  "Defines the concern `name`, a var with the docstring `doc`. A concern marks checks so that
+  a selection can select them together. A check carries the concern where its clause has
+  `name` or the concern's id among its flags, right after its waits, as [[defproven]]
+  describes: `(c [waits] name body)`. The concern, which is the var's value, and its id are
+  each a selection of the checks that carry it.
+
+  The id is `::name` in this namespace. In a namespace that refers the concern, `::name` is
+  no concern's id, and a clause that writes it as a flag or as a check's whole body is
+  refused; that namespace writes `name` or the id in full."
   {:style/indent 1}
   [name doc]
   (define/defconcern name doc))
@@ -222,9 +330,19 @@
 
 (defmacro fetch
   "Inside a check body only: reads `k` from `source` and returns its answer, or nil where the
-  source leaves `k` out. A source that throws fails the check. Legal only in call position and
-  outside any fn the body builds (fn, #(...), for, lazy-seq, delay) and outside `locking`.
-  Throws at expansion anywhere else."
+  source leaves `k` out. A source is a function from a vector of distinct keys to a map from
+  key to answer; one call of it can carry the keys that several checks and values read in one
+  pass. A read asks its source only when the body reaches it.
+
+  A source that throws an `Exception` fails the check with the failure data `{:fetch-failed
+  source :cause e}`, where `e` is what the source threw; where `e` is an
+  `InterruptedException`, the read restores the calling thread's interrupt flag. An answer
+  that is a `Throwable` fails the reads of its key in the same way, as the `:cause`. An
+  `Error` from a source propagates out of the call that ran the check.
+
+  Legal only in call position and outside any fn the body builds (fn, #(...), for, lazy-seq,
+  delay) and outside `locking`. Throws at expansion anywhere else, and in an input clause of
+  a bundle's binding."
   [source k]
   (when-not (contains? &env body/marker) (outside! &form "rec/fetch"))
   (list '&fetch source k))
@@ -237,13 +355,19 @@
   (list '&fetch-each source ks))
 
 (defmacro extant?
-  "Inside a check body only: whether the field `f` is present. Throws at expansion outside one."
+  "Inside a check body or an input clause of a bundle's binding only: whether the field `f` is
+  present; a field that holds nil is present. In a body of [[defchecks]], `f` is an input. A
+  check that asks waits on the field's shape check, as a check that reads the field does.
+
+  Legal only in call position. Unlike [[fetch]], legal inside a fn the body builds (fn,
+  #(...), for, lazy-seq, delay) and inside `locking`. Throws at expansion anywhere else."
   [f]
   (when-not (contains? &env body/marker) (outside! &form "rec/extant?"))
   (list '&extant? f))
 
 (defmacro when-extant
-  "Inside a check body only: `(if (rec/extant? f) (do body...) true)`."
+  "Inside a check body or an input clause of a bundle's binding only:
+  `(if (rec/extant? f) (do body...) true)`. Legal wherever [[extant?]] is."
   {:style/indent 1}
   [f & body]
   (when-not (contains? &env body/marker) (outside! &form "rec/when-extant"))
@@ -266,85 +390,148 @@
   (select/reading k))
 
 (defn except
-  "Selects what `s` selects, less what any of `xs` selects. Throws where a keyword among them
-  names no concern, no bundle check and no check of a type its namespace defines."
+  "Selects what `s` selects, less what any of `xs` selects. Throws ex-info whose `:error` is
+  `:recognitum/unknown-name` where a keyword among them names no concern, no bundle check and
+  no check of a type its namespace defines."
   [s & xs]
   (record/refuse-unnamed! (apply select/except s xs)))
 
 (defn union
-  "Selects what any of `xs` selects. Throws where a keyword among them names no concern, no
-  bundle check and no check of a type its namespace defines."
+  "Selects what any of `xs` selects; `(union)` selects nothing. Throws ex-info whose `:error`
+  is `:recognitum/unknown-name` where a keyword among them names no concern, no bundle check
+  and no check of a type its namespace defines."
   [& xs]
   (record/refuse-unnamed! (apply select/union xs)))
 
 ;;; ------------------------------------------------------------------ values
 
 (defn draft
-  "A draft: given a type's class, one holding nothing and passing nothing; given a sealed value,
-  one holding its entries and passing every check; given a value of a definition that a later
-  one displaced, a draft of the later one holding its entries and passing nothing, or a throw
-  saying the type has no current definition where its name no longer names one; given a
-  draft, that draft. A draft is a map that accepts any write and remembers which checks pass
-  on its entries; a write forgets the checks that read a key it writes."
+  "A draft of a [[defproven]] type: a map that accepts any write, a key the type does not
+  declare included, and remembers which checks pass on its entries. A write returns a new
+  draft that forgets the checks that read a key it writes. [[seal]] checks a draft and
+  returns the value. A draft does not equal a plain map of its entries. It prints as
+  `#recognitum/draft [ns/T {...}]`, which no reader reads.
+
+  - Given a type's class, a draft holding nothing and passing nothing.
+  - Given a sealed value, a draft holding its entries and passing every check.
+  - Given a draft, that draft.
+  - Given a value of a displaced definition, one that a later definition of its type
+    replaced, a draft of the current definition holding its entries and passing nothing.
+    Where the type's name no longer names a definition of the type, throws ex-info whose
+    `:error` is `:recognitum/no-current-definition`.
+
+  While a draft holds a key its type does not declare, [[proves?]] of it is false, whatever it
+  remembers; what it remembers is kept, and once [[clean]] or `dissoc` removes the key,
+  [[proves?]] again answers by what the draft remembers.
+
+  Throws ex-info whose `:error` is `:recognitum/no-drafts` given the class or a value of a
+  [[defproven-in]] type, and `:recognitum/not-a-type` given anything else."
   [x]
   (record/draft x))
 
 (defn clean
-  "Draft `d` without the keys its type does not declare."
+  "Draft `d` without the keys its type does not declare, remembering what `d` remembers.
+  Throws ex-info whose `:error` is `:recognitum/not-a-draft` given a sealed value, and
+  `:recognitum/no-drafts` given a value of a [[defproven-in]] type."
   [d]
   (record/clean d))
 
 (defn seal
   "The value of draft `d`, once every check `d` does not remember as passing has passed; a
-  sealed value is returned as it is. A failed seal leaves `d` remembering the checks that
-  passed, so the next seal runs only the rest. Throws ex-info whose `:error` is
-  `:recognitum/undeclared-keys`, before any check runs, where `d` holds a key its type does
-  not declare; or `:recognitum/check-failed`, with the report of [[check]] under `:failed` and
-  `:blocked`, and under `:missing` the required fields `d` lacks where it lacks any. The seal
-  runs its checks whatever is absent, so one failure names both; `:failed` is empty where only
-  fields are absent.
+  sealed value is returned as it is. A failed seal leaves `d` remembering
+  the checks that passed, so the next seal runs only the rest.
 
-  With `sel`: a draft seals against every check, so `sel` is [[every]] or the seal throws,
-  running nothing. A value of a [[defproven-in]] type runs the checks `sel` selects, what they
-  wait on and the shape check of each field it must or does hold, less what it passed, and is
-  returned itself, remembering what passed; or the seal throws as above. After a seal that
-  returns, `(proves? v sel)` is true. Without `sel`, it is sealed against [[every]]."
+  With `sel`, a sealed value reads `sel` as [[proves?]] does, and throws as [[proves?]] does
+  where `sel` is no selection or holds an unknown name.
+
+  A seal that fails throws ex-info whose data holds the type's name under `:type` and, under
+  `:error`:
+
+  - `:recognitum/undeclared-keys`, before any check runs, where `d` holds a key its type does
+    not declare, with those keys under `:keys`; or
+  - `:recognitum/check-failed`, where a check fails or a required field is absent, with the
+    report of [[check]] under `:failed` and `:blocked`, and under `:missing` the required
+    fields `d` lacks where it lacks any. The seal runs its checks whatever is absent, so one
+    failure names both; `:failed` is empty where only fields are absent.
+
+  With `sel`: a draft seals against every check, so `sel` is [[every]] or the seal throws
+  ex-info whose `:error` is `:recognitum/draft-selection`, running nothing. A value of a
+  [[defproven-in]] type runs the checks `sel` selects, what they wait on and the shape check of
+  each field it must or does hold, less what it passed, and is returned itself, remembering
+  what passed; or the seal throws as above. Where `sel` is not [[every]] and selects nothing in
+  the value's type (see [[selects-nothing?]]), the seal throws ex-info whose `:error` is
+  `:recognitum/selects-nothing` before any check runs, the shape checks included, whatever the
+  value holds or has passed: such a seal would prove nothing. A type with nothing to prove for
+  a concern says so with a check that carries the concern and passes. After a seal that
+  returns, `(proves? v sel)` is true. Without `sel`, it is sealed against [[every]], which is
+  never refused for selecting nothing.
+
+  Before any check runs, the seal also throws ex-info whose `:error` is
+  `:recognitum/displaced-constructor` given a draft of a displaced definition, one that a later
+  definition of its type replaced; `:recognitum/displaced` given a value of a displaced
+  definition, with the message a write to that value gives, which names the type and the way
+  to a value of the current definition, `(rec/seal (rec/draft v))` for a value of a
+  [[defproven]] type and `(ns/map->T (into {} v))` for a value of a [[defproven-in]] type;
+  `:recognitum/not-a-value` given a type's class; and `:recognitum/not-a-draft` given anything
+  else."
   ([d]
    (record/seal d))
   ([d sel]
    (record/seal d sel)))
 
 (defn check
-  "Runs the checks `sel` selects in `x`, and those they wait on, that `x` does not already pass;
-  a draft remembers what passed and forgets what failed, and a sealed value runs nothing.
-  Returns true, or a report: `{:failed {id {:data :doc :blocked}} :blocked #{id}}`, where
-  `:blocked` under a failed check holds the checks its failure kept from running, and
-  `:pulled-back` explains each failed check that an [[except]] removed and a wait ran anyway.
-  The report holds under `:missing` the required fields a draft lacks whose presence `sel` asks,
-  and is a report, never true, while it lacks any. A field's presence check is selected as any
-  shape check that reads only that field and no source: [[every]], [[shape]] and [[pure]]
-  select every field's; `(reading f)` selects `f`'s; a check id or a concern selects none;
-  [[union]] selects what any part selects; [[except]] selects what its first part selects less
-  what each later part selects. Every check waits on the presence checks of the required
-  fields it reads, so a selection asks a field's presence where it selects its presence check
-  or a check that waits on it. Such a wait never keeps a check from running.
-  Throws where `x` is a type's class, a type given where a value belongs, as do [[recheck]],
-  [[seal]], the batch operations and the others that take a value; [[proves?]] answers false."
+  "Runs the checks `sel` selects in `x`, and those they wait on, that `x` does not already pass.
+  A draft, or a value of a [[defproven-in]] type, remembers what passed and forgets what
+  failed. A key that a draft holds and its type does not declare is not checked: the answer
+  can be true where [[seal]] would throw for that key, and [[proves?]] is false while the draft
+  holds it. A sealed value runs nothing and answers true. True from `check` is therefore no
+  proof; [[sealed?]] and [[proves?]] answer whether a value proves its checks.
+
+  Returns true, or a report: `{:failed {id {:data :doc :blocked}} :blocked #{id}}`. Under a
+  failed check, `:data` is its failure data, `:doc` its docstring where it has one, and
+  `:blocked` the checks its failure kept from running. `:pulled-back` explains each failed
+  check that an [[except]] removed and a wait ran anyway.
+
+  A selection asks the presence of a required field where it selects the field's presence check
+  or a check that waits on that presence check, directly or through other checks; every check
+  waits on the presence check of each required field it reads. Where `x` is a draft or a value
+  of a [[defproven-in]] type and lacks a field whose presence `sel` asks, the answer is a
+  report, never true, and holds each such field under `:missing`. A presence check is selected as
+  a shape check that reads only its field and no source would be: [[every]], [[shape]] and
+  [[pure]] select every required field's; `(reading k)` selects that of the field whose key is
+  `k`; [[union]] selects what any part selects; [[except]] selects what its first part selects
+  less what each later part selects; any other selection, a check id or a concern among them,
+  selects none. The wait of a check on a presence check never keeps the check from running.
+
+  Throws ex-info whose `:error` is `:recognitum/unknown-name` where `sel` is or holds a keyword
+  that names no check of the type of `x`, no concern and no bundle check;
+  `:recognitum/not-a-selection` where `sel` is no selection; `:recognitum/not-a-type` where `x`
+  is of no type; and `:recognitum/not-a-value` where `x` is a type's class. Given a class,
+  [[recheck]] and [[seal]] throw `:recognitum/not-a-value` too, as do [[check-all]] and
+  [[recheck-all]] where `xs` holds one; [[proves?]] answers false.
+
+  Where `x` is of a displaced definition, one that a later definition of its type replaced,
+  `check` throws, before any check runs, what [[seal]] throws for `x`: `:recognitum/displaced`
+  for a value, with the message a write to that value gives, and
+  `:recognitum/displaced-constructor` for a draft."
   [x sel]
   (record/check x sel))
 
 (defn recheck
   "Runs the checks `sel` selects in `x` whether or not `x` passes them, and those they wait on
-  that it does not. A draft remembers as [[check]] does; a sealed value stays as it is. Returns
-  as [[check]] does."
+  that it does not. A draft, or a value of a [[defproven-in]] type, remembers as under
+  [[check]]; a sealed value stays as it is, whatever the checks answer. Returns and throws as
+  [[check]] does."
   [x sel]
   (record/recheck x sel))
 
 (defn check-all
   "Runs what [[check]] would run on each value of `xs`, which may be of several types, in one
-  pass, so values that read the same source share its calls. Each draft remembers what
-  passed and forgets what failed, as under [[check]]. Returns a vector of what [[check]]
-  returns, one per value, in order."
+  pass, so values that read the same source share its calls. Each draft, and each value of a
+  [[defproven-in]] type, remembers what passed and forgets what failed, as under [[check]].
+  Returns a vector of what [[check]] returns, one per value, in order. Throws as [[check]] does;
+  where `xs` holds a value or a draft of a displaced definition, it throws what [[check]] throws
+  for that one before any check of any value in `xs` runs."
   [xs sel]
   (record/check-all xs sel))
 
@@ -352,19 +539,29 @@
   "Runs what [[recheck]] would run on each value of `xs`, which may be of several types, in one
   pass, so values that read the same source share its calls. Each draft and each value of a
   [[defproven-in]] type remembers as under [[recheck]]; a sealed value stays as it is. Returns a
-  vector of what [[recheck]] returns, one per value, in order."
+  vector of what [[recheck]] returns, one per value, in order, and throws as [[check-all]]
+  does."
   [xs sel]
   (record/recheck-all xs sel))
 
 (defn seal-all
   "Seals every draft in `shape`, a value of plain data, all or nothing, and returns `shape`
-  with each draft replaced by its value. A value of a [[defproven-in]] type is sealed in place
-  against `sel` (against [[every]] without one), as [[seal]] seals it; drafts are sealed
-  against every check, whatever `sel` is.
+  as the walk below rebuilds it, with each draft replaced by its value. A value of a
+  [[defproven-in]] type is sealed in place against `sel` (against [[every]] without one), as
+  [[seal]] seals it; drafts are sealed against every check, whatever `sel` is.
 
-  The walk enters maps, keys and values, as `clojure.walk` does; vectors, lists and sets by
-  element; and the fields of every draft. A list stays a list; any other sequence, a lazy one
-  included, becomes a vector. A sealed value is not entered and comes back as it is.
+  The walk enters these, and nothing else: a map, keys and values, as `clojure.walk` enters
+  it, a record included; a map entry; a vector; a list; a set; a queue (a
+  `clojure.lang.PersistentQueue`); any other sequence, a lazy one included; and the fields of
+  every draft. A map, a record, a map entry, a vector, a list and a set each come back as a
+  collection of the same kind, and a sorted map or set comes back sorted as it was. A queue
+  comes back as a vector, and so does any other sequence, whether or not it holds a draft, in
+  what is returned and in `:drafts`. A sealed value is not entered and comes back as it is.
+
+  Anything else is not searched and comes back as it is, and a draft inside it stays a draft
+  that no check ran on: a Java collection such as an `ArrayList` or a `HashMap`, an array, a
+  reference such as an atom, a transient, an object of a `deftype`. Seal a draft before
+  putting it in one of these, or give `seal-all` the drafts in a vector.
 
   Inner drafts are sealed first: a draft holding drafts is checked holding their values, or,
   where one failed, that draft. Each draft is checked as [[seal]] would check it, even where a
@@ -376,20 +573,23 @@
   `:recognitum/drafts-failed`; `:failures`, a map from the path of each draft that failed to
   the ex-data [[seal]] would have thrown for it; and `:drafts`, `shape` as walked with every
   draft in place, ready to mend at those paths and seal again. A path is what `get-in` takes,
-  with an index for a list or sequence and a set's member for a set; a draft in key position
-  ends its path with `:recognitum.core/key` after the key. A check body that throws makes `seal-all` throw
-  it.
+  with an index for a list, a queue or a sequence and a set's member for a set; a draft in key
+  position ends its path with `:recognitum.core/key` after the key. A check body that throws
+  makes `seal-all` throw it.
 
   The walk enters a [[defproven-in]] value's fields as a draft's, sealing what they hold first.
   It comes back as the very value given unless the walk replaced a draft in it; then it comes
   back as a new value, each field holding such a draft written as `assoc` writes it, so it
   forgets the checks that read those fields, and is sealed. In `:drafts`, such a value holds
-  each draft back in its field.
+  each draft back in its field. A [[defproven-in]] value in whose type `sel`, not [[every]],
+  selects nothing fails at its path with the error `:recognitum/selects-nothing`, as [[seal]]
+  refuses it, and none of its checks runs; the walk still seals what it holds. Drafts and
+  sealed values are never refused for their selection.
 
-  A value of a redefined type's earlier definition, sealed or of a [[defproven-in]] type, proves
-  nothing: it fails at its path with the error `:recognitum/displaced`, beside every other
-  failure, whether or not its type's name names a current definition, and is given back in
-  `:drafts` as it is."
+  A value of a displaced definition, one that a later definition of its type replaced, proves
+  nothing, whether [[defproven]] or [[defproven-in]] defined the type: it fails at its path
+  with the error `:recognitum/displaced`, beside every other failure, whether or not its
+  type's name names a current definition, and is given back in `:drafts` as it is."
   ([shape]
    (record/seal-all shape ::key))
   ([shape sel]
@@ -400,10 +600,14 @@
   with each sealed value it reaches opened as a draft and each draft left as it is, neither
   entered. `f` may return a different shape. Throws as [[seal-all]] does. A value of a
   [[defproven-in]] type is neither opened, nor entered, nor sealed, as a string is not: it
-  comes back as `f` left it, a draft inside it unsealed. A sealed value of a displaced
-  definition is opened as [[draft]] opens it, a draft of the current definition; where its
-  type's name names none, it is left as it is, `f` gets it, and the seal reports it as
-  [[seal-all]] does."
+  comes back as `f` left it, a draft inside it unsealed. A value of a displaced
+  definition of a [[defproven]] type is opened as [[draft]] opens it, as a draft of the current
+  definition; where its type's name names no current definition, it is left as it is, `f`
+  gets it, and the seal reports it as [[seal-all]] does.
+
+  What [[seal-all]] does not search, `drafting-all` does not search: a sealed value inside a
+  Java collection, an array, an atom or an object of a `deftype` is not opened, and `f` gets
+  the holder as it is."
   [shape f]
   (record/drafting-all shape f ::key))
 
@@ -416,10 +620,21 @@
 
 (defn proves?
   "Whether `x` holds every required field and passes the checks `sel` selects, those they wait
-  on, and the shape check of each field it must or does hold. True for every sealed value of a type's current definition; for
-  a draft or a value of a [[defproven-in]] type, a matter of what it remembers. False for a
-  value of a displaced definition, for a draft made before its type was defined again, and
-  for a type's class."
+  on, and the shape check of each field it must or does hold. Runs nothing.
+
+  Given a sealed value, a draft or a value of a [[defproven-in]] type, each of a type's current
+  definition, `proves?` reads `sel` first: it throws ex-info whose `:error` is
+  `:recognitum/unknown-name` where `sel` is or holds a keyword that names no check of the type,
+  no concern and no bundle check, a check id of another type included, and
+  `:recognitum/not-a-selection` where `sel` is no selection. Then it is true for the sealed
+  value, also where `sel` is a concern no check of its type carries, or a bundle the type does
+  not bind. For the draft it is false while the draft holds a key its type does not declare,
+  else a matter of what it holds and remembers. For the value of a [[defproven-in]] type it is
+  a matter of what it remembers, and false where `sel` is not [[every]] and selects nothing in
+  its type (see [[selects-nothing?]]), whatever it has passed, as [[seal]] by `sel` refuses it.
+
+  False, with `sel` unread, for a value or a draft of a displaced definition, one that a later
+  definition of its type replaced, for a type's class, and for anything of no type."
   [x sel]
   (record/proves? x sel))
 
@@ -427,27 +642,35 @@
   "For each map of `field-maps`, whether it would make a valid value of the type whose class is
   `T` under the checks `sel` selects ([[every]] where none is given): what [[check]] with `sel`
   answers of a fresh draft of `T` holding the map's entries, true or a report, with the keys
-  `T` does not declare under `:undeclared`, the checks run anyway. A map is any map: a plain
-  map, a record, or a draft or a value of any type, displaced or not, whose entries are read
-  and whose memory is neither read nor written.
+  `T` does not declare under `:undeclared`, the checks run anyway. Where [[defproven-in]]
+  defined `T`, which then has no drafts, the answer is what [[check]] with `sel` answers of a
+  value of `T` holding those entries of the map whose keys `T` declares, with the other keys
+  under `:undeclared`. A map is any map: a plain map, a record, or a draft or a value of any
+  type, displaced or not, whose entries are read and whose memory is neither read nor written.
 
-  One run over every map, so the maps share each source's calls as in [[check-all]]. A report
+  One pass over every map, so the maps share each source's calls as in [[check-all]]. A report
   holds under `:missing` the required fields a map lacks whose presence `sel` asks, as
-  [[check]]'s does; without `sel`, or with [[every]], that is every required field, so the
-  answer is true exactly when [[seal]] of a draft holding the map would seal.
+  [[check]]'s does. Without `sel`, or with [[every]], `sel` asks the presence of every required
+  field, so, without overrides and where [[defproven]] defined `T`, the answer is true exactly
+  when [[seal]] of a draft holding the map would seal.
 
   `overrides` maps a source to a function of the source's shape, keys in and a map from each
-  key to its answer out, which answers in its place for this call only: every read of the
-  source in its checks calls the override, and the source is not called. Any other run, on
-  this thread or another, reads the source itself. No draft is kept and nothing is
-  remembered, so no value proves a check that passed under an override."
+  key to its answer out. For this call only, every read of the source in the checks the call
+  runs calls that function, and the source is not called. Any other run, on this thread or
+  another, reads the source itself. No draft is made and nothing is remembered, so no value
+  proves a check that passed under an override.
+
+  Throws ex-info whose `:error` is `:recognitum/not-a-type` where `T` is not a type's class,
+  `:recognitum/displaced-constructor` where `T` is the class of a displaced definition, or
+  `:recognitum/not-a-map` where one of `field-maps` is not a map."
   ([T field-maps] (record/probe-all T field-maps every nil))
   ([T field-maps sel] (record/probe-all T field-maps sel nil))
   ([T field-maps sel overrides] (record/probe-all T field-maps sel overrides)))
 
 (defn probe
   "What [[probe-all]] answers of the one map `fields`: true where it would make a valid value
-  of the type whose class is `T` under the checks `sel` selects, else a report.
+  of the type whose class is `T` under the checks `sel` selects, else a report. Throws as
+  [[probe-all]] does.
 
       (rec/probe Heist fields)
       (rec/probe Heist fields rec/every {db/on-file (fn [ks] (zipmap ks (repeat true)))})"
@@ -456,20 +679,38 @@
   ([T fields sel overrides] (record/probe T fields sel overrides)))
 
 (defn proven-checks
-  "The ids of the checks `x` passes: all of its type's for a sealed value, those a draft or a
-  value of a [[defproven-in]] type remembers."
+  "The ids of the checks `x` passes: all of its type's for a sealed value, and those a draft or
+  a value of a [[defproven-in]] type remembers. Of a displaced definition, one that a later
+  definition of its type replaced, a value has none, and a draft has those it remembers,
+  though [[proves?]] of that draft is false."
   [x]
   (record/proven-checks x))
 
 (defn proven-concerns
-  "The ids of the concerns whose checks `x` passes, as [[proves?]] judges each."
+  "The ids of the concerns whose checks `x` passes, as [[proves?]] judges each: none for a draft
+  that holds a key its type does not declare."
   [x]
   (record/proven-concerns x))
 
 (defn checks-of
-  "The ids of the checks `sel` selects in the type of `x`: a value, a draft or a type's class."
+  "The ids of the checks `sel` selects in the type of `x`, which is a value, a draft or a
+  type's class. A check that a selected check waits on is among them only where `sel` selects
+  it too. Throws ex-info whose `:error` is `:recognitum/unknown-name` where `sel` is or holds a
+  keyword that names no check of the type, no concern and no bundle check."
   [sel x]
   (record/checks-of sel x))
+
+(defn selects-nothing?
+  "Whether `sel` selects nothing in the type of `x`, a value, a draft or a type's class: none
+  of its checks, and the presence of none of its required fields. A concern no check of the
+  type carries, a bundle the type does not bind or a check of one, `(union)`, `(except s s)`,
+  and `(reading k)` where no check reads `k` and `k` is not a required field, select nothing;
+  [[every]] selects nothing only in a type with no check and no required field. [[seal]] of a
+  [[defproven-in]] value by such a selection other than [[every]] throws, and [[proves?]] by
+  it is false. Runs nothing; throws where `sel` names a check the type lacks, as
+  [[checks-of]] does."
+  [sel x]
+  (record/selects-nothing? sel x))
 
 (defn sealed?
   "Whether `x` is a value of the current definition of a [[defproven]] type. False for every
@@ -485,7 +726,8 @@
 (defn data-readers
   "A map from each type's tag to its `map->T`, for `clojure.edn/read` as `:readers`: one entry
   for each current type that its namespace maps its name to. An entry held across a
-  redefinition of its type refuses, as a held `map->T` does."
+  redefinition of its type throws ex-info whose `:error` is
+  `:recognitum/displaced-constructor`, as a held `map->T` does."
   []
   (into {} (for [[n t] (record/current-types)]
              [n #(record/make t % "Read again with the current readers: (rec/data-readers)")])))

@@ -8,7 +8,9 @@
        recognitum.proof.Proven and each interface its definition lists; where the definition declares keys, also
        IKeywordLookup. final. Holds one field f<i> per declared key K<i>, ABSENT where the
        value lacks that key, a private map `ext` of its other entries, a private `_meta`
-       and a private count `cnt`, which every constructor sets. T(Object key, Object data) throws unless key is T.KEY, splits data into the
+       and a private count `cnt`, which every constructor sets. T(Object key, Object data) throws unless key is T.KEY, a
+       SecurityException whose message, one constant, names T and closes with the words the
+       definition handed down as `:instead`, or with the strategy's own; it splits data into the
        fields and ext, and takes data's meta. Reads of a declared key read its field, others
        forward to ext; a keyword's lookup of a declared key reads the field through a thunk
        class T$K<i>, as on a defrecord. seq conses the present fields' entries, in the order
@@ -85,8 +87,9 @@
 
   `refusal` and `define-type` refuse through one analysis of the definition: `define-type`
   throws, as `ex-info` data, exactly the refusal `refusal` answers. The kinds beyond the
-  protocol's: `:malformed` (the shape of the definition, its keys or a signature),
-  `:too-many-keys` (more than 250 declared keys), `:not-a-function`,
+  protocol's: `:malformed` (the shape of the definition, its keys, its `:instead`, which is a
+  string or nil, or a signature), `:too-many-keys` (more than 250 declared keys),
+  `:too-many-words` (an `:instead` of more than 10000 characters), `:not-a-function`,
   `:duplicate` (two signatures of one method), `:not-an-interface`, `:draft-interface`
   (an interface a draft implements) and `:reloaded-interface` (a listed interface whose name
   now loads another class)."
@@ -263,9 +266,11 @@
 
 (defn- no-key-message
   "What T's constructor says when called without the key: the type, by its class name, and
-  that a value is made only through the engine."
-  [t]
-  (str (.replace ^String t \/ \.) "'s constructor takes a key only recognitum holds: a value of this type is made only through recognitum"))
+  then `instead`, the words its definition handed down, or, where it handed down none, that a
+  value is made only through the engine."
+  [t instead]
+  (str (.replace ^String t \/ \.) "'s constructor takes a key only recognitum holds: "
+       (or instead "a value of this type is made only through recognitum")))
 
 (defn- push-int! [^MethodVisitor mv n]
   (if (<= -128 n 127)
@@ -405,6 +410,12 @@
   255 slots, this and meta, ext and the count among them. A defrecord's constructor has the
   same bound."
   250)
+
+(def ^:private max-words
+  "The most characters of the words a definition hands down as `:instead`. T's constructor
+  loads its message, which holds them, as one constant of the class file, at most 65535 bytes;
+  a character takes at most three, which leaves room for the opening and the class name."
+  10000)
 
 (def ^:private inline-keys
   "The most declared keys whose code each method of T holds inline. HotSpot compiles no method
@@ -706,8 +717,9 @@
   forward, each to the function at its index in FNS; `ks` the declared keys, one field each.
   An unsealed T also holds a memory, `mem`, which its constructor takes after the data and
   memory$() answers, and which a change takes from the last element of what CHG answered;
-  it has no guards, and its assocEx is its assoc where the key is absent."
-  [t ifaces plan ks unsealed?]
+  it has no guards, and its assocEx is its assoc where the key is absent. `instead` closes the
+  message of T's constructor called without the key, as [[no-key-message]] says."
+  [t ifaces plan ks unsealed? instead]
   (let [cw    (ClassWriter. ClassWriter/COMPUTE_FRAMES)
         super (iname clojure.lang.APersistentMap)
         n     (count ks)
@@ -841,7 +853,7 @@
           ok (Label.)
           m  (if unsealed? 4 3)
           c  (inc m)]
-      (require-key! mv t 1 (no-key-message t))
+      (require-key! mv t 1 (no-key-message t instead))
       (aload! mv 2)
       (.visitTypeInsn mv Opcodes/INSTANCEOF IPM)
       (jump! mv Opcodes/IFNE ok)
@@ -1939,12 +1951,18 @@
   "What defining `definition` takes, `{:interfaces :plan :prefs}`, or why it is refused,
   `{:refusal r}`. Defines and sets nothing. Besides [[plan]]'s refusals, refuses a listed
   interface whose name now loads another class (an interface defined again after the
-  definition named it), which would leave values outside the one listed, and a print
-  preference that cannot be set."
+  definition named it), which would leave values outside the one listed, a print
+  preference that cannot be set, and an `:instead` that is not a string or nil, or is
+  longer than [[max-words]]."
   [definition]
   (try
     (let [[ifaces plan] (plan (or definition {}))
+          instead (:instead definition)
           loader (DynamicClassLoader. (RT/baseLoader))]
+      (when-not (or (nil? instead) (string? instead))
+        (refuse :malformed ":instead is a string or nil" instead))
+      (when (> (count instead) max-words)
+        (refuse :too-many-words (str ":instead holds at most " max-words " characters") (count instead)))
       (doseq [^Class i ifaces]
         (when-not (identical? i (try (Class/forName (.getName i) false loader)
                                      (catch ClassNotFoundException _ nil)))
@@ -1952,7 +1970,7 @@
       (let [prefs (print-preferences ifaces)]
         (check-outranked prefs)
         {:interfaces ifaces :plan plan :prefs prefs :keys (vec (:keys definition))
-         :unsealed (true? (:unsealed definition))}))
+         :unsealed (true? (:unsealed definition)) :instead instead}))
     (catch clojure.lang.ExceptionInfo e
       (if-let [r (::refusal (ex-data e))] {:refusal r} (throw e)))))
 
@@ -1974,14 +1992,14 @@
   with its message. The refusal is checked before T is defined, so it leaves no class under
   the type's name."
   [type-name definition]
-  (let [{ks :keys :keys [refusal interfaces plan prefs unsealed]} (analysis definition)
+  (let [{ks :keys :keys [refusal interfaces plan prefs unsealed instead]} (analysis definition)
         _      (when refusal (throw (ex-info (:message refusal) refusal)))
         ^String n (if type-name (class-name type-name) (fresh-name))
         t      (.replace n \. \/)
         d      (str t "$Draft")
         loader (DynamicClassLoader. (RT/baseLoader))
         _      (prefer-print-as-map! prefs)
-        vc     (.defineClass loader n (value-class-bytes t interfaces plan ks unsealed) nil)
+        vc     (.defineClass loader n (value-class-bytes t interfaces plan ks unsealed instead) nil)
         _      (when unsealed (flag! own-unsealed vc))
         _      (dotimes [i (count ks)]
                  (.defineClass loader (.replace ^String (thunk-name t i) \/ \.) (thunk-bytes t i) nil))

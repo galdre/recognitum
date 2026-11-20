@@ -46,12 +46,17 @@
          recognitum.check-test                      #{recognitum.core recognitum.engine recognitum.example.ballot
                                                       recognitum.example.db recognitum.example.perms demo.heist}
          recognitum.corpus-test                     #{}
-         recognitum.demo-test                       #{recognitum.core demo.heist-run demo.potion demo.potion-run}
+         recognitum.demo-test                       #{recognitum.core demo.authz demo.guild demo.heist demo.heist-run
+                                                      demo.orders demo.permissions demo.potion demo.potion-run}
          ;; forges a recognitum.record.Draft to show that seal refuses it
          recognitum.draft-test                      #{recognitum.core demo.heist demo.house recognitum.record}
          recognitum.engine-test                     #{recognitum.engine}
+         recognitum.guarded-read-test               #{recognitum.core}
          recognitum.heist-test                      #{recognitum.core demo.heist demo.house}
-         recognitum.readme-test                     #{recognitum.core demo.authz demo.guild demo.heist demo.orders demo.permissions demo.potion}
+         ;; runs the README's code blocks as recognitum.docs-test runs a document's
+         recognitum.readme-test                     #{recognitum.docs-test}
+         ;; runs the code blocks of the documents under docs, which require what they use
+         recognitum.docs-test                       #{}
          ;; asks the key-class strategy whether a type's checked write is installed
          recognitum.record-test                     #{recognitum.core recognitum.proof recognitum.proof.key-class}
          recognitum.key-class-test                  #{recognitum.proof recognitum.proof.key-class}
@@ -61,9 +66,15 @@
                                                       recognitum.record}
          recognitum.layers-test                     #{}
          recognitum.wide-test                       #{recognitum.core}
+         ;; reads a source through recognitum.record/sourced to show it allocates nothing
+         recognitum.probe-test                      #{recognitum.core recognitum.record}
          recognitum.flag-place-test                 #{recognitum.core}
-         recognitum.walkthrough-test                #{demo.authz demo.orders}
-         recognitum.probe-test                      #{recognitum.core}}
+         ;; counts the calls of recognitum.record/selected to show that emptiness is worked out once per type
+         recognitum.empty-selection-test            #{recognitum.core recognitum.record}
+         recognitum.redefinition-test               #{recognitum.core}
+         recognitum.displaced-test                  #{recognitum.core}
+         recognitum.proves-test                     #{recognitum.core}
+         recognitum.walkthrough-test                #{demo.authz demo.orders}}
 
  ;; dependencies the design forbids that the code still has, each to be removed from the code;
  ;; the check fails on any other violation, and on an entry here the code no longer has

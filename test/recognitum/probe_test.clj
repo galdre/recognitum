@@ -3,7 +3,11 @@
   leave behind; seal-all and drafting-all over values of displaced definitions."
   (:require
    [clojure.test :refer [deftest is testing]]
-   [recognitum.core :as rec]))
+   [clojure.test.check :as tc]
+   [clojure.test.check.generators :as gen]
+   [clojure.test.check.properties :as prop]
+   [recognitum.core :as rec]
+   [recognitum.record :as record]))
 
 (defn- err [f]
   (try (f) nil (catch clojure.lang.ExceptionInfo e (ex-data e))))
@@ -230,6 +234,117 @@
     (testing "an undeclared key is refused before any check runs, as before"
       (is (= :recognitum/undeclared-keys (:error (err #(rec/seal (of Note {::z 1})))))))))
 
+(deftest seal-all-names-the-failed-check-and-the-absent-field-of-a-defproven-in-value-test
+  (let [shape (fn [d] (select-keys d [:error :type :failed :missing]))
+        by-seal (fn [make] (shape (err #(rec/seal (make)))))
+        by-seal-all (fn [make] (shape (get-in (err #(rec/seal-all [(make)])) [:failures [0]])))
+        failed-u {::u {:data false :blocked #{}}}
+        failure (fn [t m] (assoc m :error :recognitum/check-failed :type t))]
+    (testing "a draft that fails a check and lacks a field: seal-all's failure is seal's"
+      (let [want (failure 'recognitum.probe-test/Note {:failed failed-u :missing #{::note}})]
+        (is (= want (by-seal #(of Note {::u :x}))) "seal")
+        (is (= want (by-seal-all #(of Note {::u :x}))) "seal-all")))
+    (testing "a value of a defproven-in type that only lacks a field"
+      (let [want (failure 'recognitum.probe-test/Loose {:failed {} :missing #{::note}})]
+        (is (= want (by-seal #(map->Loose {::u 1}))) "seal")
+        (is (= want (by-seal-all #(map->Loose {::u 1}))) "seal-all")))
+    (testing "a value of a defproven-in type that fails a check and lacks a field"
+      (let [want (failure 'recognitum.probe-test/Loose {:failed failed-u :missing #{::note}})]
+        (is (= want (by-seal #(map->Loose {::u :x}))) "seal")
+        (is (= want (by-seal-all #(map->Loose {::u :x}))) "seal-all")))))
+
+(rec/defproven-in Wide [u note w]
+  rec/checks
+  (u [] (int? u)))
+
+(deftest seal-all-of-a-defproven-in-value-names-every-absent-field-as-seal-does-test
+  (let [shape (fn [d] (select-keys d [:error :type :failed :missing]))
+        want {:error :recognitum/check-failed :type 'recognitum.probe-test/Wide :failed {} :missing #{::note ::w}}]
+    (doseq [[label sel] [["every" rec/every]
+                         ["a selection that asks the presence of one absent field" (rec/reading ::note)]
+                         ["a selection that asks the presence of no absent field" ::u]]]
+      (testing label
+        (is (= want (shape (err #(rec/seal (map->Wide {::u 1}) sel)))) "seal")
+        (is (= want (shape (get-in (err #(rec/seal-all [(map->Wide {::u 1})] sel)) [:failures [0]])))
+            "seal-all")))))
+
+(rec/defproven-in Gauge [u v ^:optional w]
+  rec/checks
+  (u [] (int? u))
+  (w [] (int? w)))
+
+(rec/defproven GaugeDraft [u v ^:optional w]
+  rec/checks
+  (u [] (int? u))
+  (w [] (int? w)))
+
+(def ^:private gauge-map
+  (gen/fmap (fn [kvs] (into {} (remove (comp #{::absent} second)) kvs))
+            (apply gen/tuple (for [k [::u ::v ::w]]
+                               (gen/fmap (fn [x] [k x]) (gen/elements [::absent 0 1 :x nil]))))))
+
+(defn- sealed-or-failure
+  "`:sealed` where `f` returns, else the ex-data of its throw."
+  [f]
+  (try (f) :sealed (catch clojure.lang.ExceptionInfo e (ex-data e))))
+
+(deftest seal-all-fails-with-what-seal-throws-over-generated-values-test
+  (let [by-seal-all (fn [f] (let [r (sealed-or-failure f)]
+                              (if (= :sealed r) r (get (:failures r) [0] r))))
+        agree (fn [prop] (let [r (tc/quick-check 300 prop)]
+                           (is (:pass? r) (pr-str (get-in r [:shrunk :smallest])))))]
+    (testing "values of a defproven-in type, under each selection"
+      (agree (prop/for-all [m gauge-map
+                            sel (gen/elements [nil rec/every rec/shape ::u ::w (rec/reading ::v)
+                                               (rec/except rec/every ::w) (rec/union)])]
+               (= (sealed-or-failure #(if sel (rec/seal (map->Gauge m) sel) (rec/seal (map->Gauge m))))
+                  (by-seal-all #(if sel (rec/seal-all [(map->Gauge m)] sel) (rec/seal-all [(map->Gauge m)])))))))
+    (testing "drafts of a defproven type"
+      (agree (prop/for-all [m gauge-map]
+               (= (sealed-or-failure #(rec/seal (of GaugeDraft m)))
+                  (by-seal-all #(rec/seal-all [(of GaugeDraft m)]))))))))
+
+(deftest seal-all-of-a-defproven-in-value-under-an-except-fails-as-seal-does-test
+  (testing "w runs as the shape check of a field the value holds, though the selection removed it"
+    (let [sel (rec/except rec/every ::w)
+          by-seal (sealed-or-failure #(rec/seal (map->Gauge {::u 1 ::v 1 ::w :x}) sel))
+          by-seal-all (get-in (sealed-or-failure #(rec/seal-all [(map->Gauge {::u 1 ::v 1 ::w :x})] sel))
+                              [:failures [0]])]
+      (is (= #{::w} (set (keys (:failed by-seal)))))
+      (is (= by-seal by-seal-all))
+      (is (not (contains? by-seal-all :pulled-back))))))
+
+(deftest check-all-reports-what-a-defproven-in-value-lacks-test
+  (let [lacking {:failed {} :blocked #{} :missing #{::note}}]
+    (testing "a value whose check runs"
+      (is (= [lacking] (rec/check-all [(map->Loose {::u 1})] rec/every)) "check-all")
+      (is (= [lacking] (rec/recheck-all [(map->Loose {::u 1})] rec/every)) "recheck-all"))
+    (testing "beside a failed check"
+      (let [[r] (rec/check-all [(map->Loose {::u :x})] rec/every)]
+        (is (= #{::note} (:missing r)))
+        (is (= #{::u} (set (keys (:failed r)))))))
+    (testing "a value that remembers every check, so that nothing runs"
+      (let [v (map->Loose {::u 1})]
+        (rec/check v ::u)
+        (is (= #{::u} (rec/proven-checks v)))
+        (is (= [lacking] (rec/check-all [v] rec/every)))))
+    (testing "a value that holds every required field"
+      (is (= [true] (rec/check-all [(map->Loose {::u 1 ::note "n"})] rec/every)))
+      (is (= [true] (rec/recheck-all [(map->Loose {::u 1 ::note "n"})] rec/every))))))
+
+(rec/defproven Chain [a b]
+  rec/checks
+  (a-small [] (< a 5))
+  (late [a-small] (some? b)))
+
+(deftest a-selected-check-asks-the-presence-of-what-the-checks-it-waits-on-read-test
+  (testing "late reads b and waits on a-small, which reads a"
+    (is (= #{#{::a ::b}} (set (vals (missing-by-each-run Chain {} ::late)))))
+    (is (= #{#{::a}} (set (vals (missing-by-each-run Chain {::b 1} ::late)))))
+    (is (= #{#{::b}} (set (vals (missing-by-each-run Chain {::a 1} ::late))))))
+  (testing "a-small, which waits on no check, asks a alone"
+    (is (= #{#{::a}} (set (vals (missing-by-each-run Chain {} ::a-small)))))))
+
 ;;; ------------------------------------------------------------------ probing
 
 (deftest probe-answers-as-check-on-a-fresh-draft
@@ -272,6 +387,35 @@
       (is (= #{} (rec/proven-checks (of Item {::a 1 ::b 1}))))
       (is (= :recognitum/check-failed (:error (err #(rec/seal (of Item {::a 1 ::b 1})))))))))
 
+(deftest a-probe-of-a-draft-does-not-read-what-the-draft-remembers-test
+  (let [d (doto (of Item {::a 0 ::b 1}) (rec/check rec/every))
+        n (atom 0)]
+    (is (= #{::a ::known} (rec/proven-checks d)) "the draft remembers that known passed")
+    (is (= {:failed {::known {:data false :blocked #{}}} :blocked #{}}
+           (rec/probe Item d rec/every {on-file (answering false n)}))
+        "the probe runs known again, and the override fails it")
+    (is (= 1 @n))
+    (is (= #{::a ::known} (rec/proven-checks d)) "and the draft remembers what it did")))
+
+(defrecord Plain [])
+
+(defrecord Slip [a b])
+
+(deftest a-probe-reads-a-defrecord-record-test
+  (let [n (atom 0)]
+    (testing "a record holding the type's keys answers as the plain map of its entries"
+      (is (record? (assoc (->Plain) ::a 0 ::b 1)))
+      (is (true? (rec/probe Item (assoc (->Plain) ::a 0 ::b 1))))
+      (is (= {:failed {::known {:data false :blocked #{}}} :blocked #{}}
+             (rec/probe Item (assoc (->Plain) ::a 1 ::b 1))))
+      (is (= {:failed {} :blocked #{} :missing #{::b}} (rec/probe Item (assoc (->Plain) ::a 0))))
+      (is (true? (rec/probe Item (assoc (->Plain) ::a 1 ::b 1) rec/every {on-file (answering true n)}))))
+    (testing "a record's own fields are undeclared, and the checks still run"
+      (is (= {:failed {} :blocked #{} :undeclared #{:a :b}}
+             (rec/probe Item (assoc (->Slip 0 1) ::a 0 ::b 1))))
+      (is (= [{:failed {::known {:data false :blocked #{}}} :blocked #{} :undeclared #{:a :b}}]
+             (rec/probe-all Item [(assoc (->Slip 0 1) ::a 1 ::b 1)]))))))
+
 (deftest an-override-replaces-the-source-for-the-call-only
   (let [n (atom 0)]
     (reset! calls [])
@@ -282,6 +426,52 @@
     (is (= [[1]] @calls) "the next probe reads the source")
     (testing "an empty map overrides nothing"
       (is (= (rec/probe Item {::a 1 ::b 1}) (rec/probe Item {::a 1 ::b 1} rec/every {}))))))
+
+(rec/defchecks filed [k]
+  rec/checks
+  (k-on-file [] (true? (rec/fetch on-file k)))
+  (ks-on-file [] (every? true? (vals (rec/fetch-each on-file [k])))))
+
+(rec/defproven Bound [a]
+  filed
+  (k [] a)
+  rec/checks
+  (a [] (int? a)))
+
+(deftest an-override-answers-a-source-a-bundle-check-reads-test
+  (let [n (atom 0)]
+    (testing "without an override, the source answers both of the bundle's checks"
+      (reset! calls [])
+      (is (= #{::k-on-file ::ks-on-file} (set (keys (:failed (rec/probe Bound {::a 1}))))))
+      (is (= #{[1]} (set @calls))))
+    (testing "the override answers the fetch and the fetch-each, and the source is not called"
+      (reset! calls [])
+      (is (true? (rec/probe Bound {::a 1} rec/every {on-file (answering true n)})))
+      (is (pos? @n))
+      (is (= [] @calls)))))
+
+(defn alias-of
+  "A source: for each key, the key after it."
+  [ks]
+  (swap! calls conj [:alias-of (vec ks)])
+  (zipmap ks (map inc ks)))
+
+(rec/defproven Nested [a]
+  rec/checks
+  (a [] (int? a))
+  (aliased [a] (true? (rec/fetch on-file (rec/fetch alias-of a)))))
+
+(deftest an-override-answers-a-fetch-inside-a-fetch-test
+  (let [n (atom 0)]
+    (testing "without an override: 1 is aliased to 2, which is not on file"
+      (reset! calls [])
+      (is (= #{::aliased} (set (keys (:failed (rec/probe Nested {::a 1}))))))
+      (is (= [[:alias-of [1]] [2]] @calls)))
+    (testing "the inner source's override answers 7, which is on file; the outer source is read itself"
+      (reset! calls [])
+      (is (true? (rec/probe Nested {::a 1} rec/every {alias-of (answering 7 n)})))
+      (is (= 1 @n))
+      (is (= [[7]] @calls)))))
 
 (deftest an-override-is-not-seen-by-a-run-on-another-thread
   (let [asked (promise) release (promise)
@@ -311,6 +501,35 @@
     (is (= #{::known} (set (keys (:failed (second @inner))))) "and so did a probe without overrides")
     (is (= 1 @n))))
 
+(def ^:private inner-batch (atom nil))
+
+(rec/defproven OuterBatch [y]
+  rec/checks
+  (y [] (do (reset! inner-batch
+                    (let [d (of Item {::a 1 ::b 1})
+                          sealed (:sealed @inner-batch)]
+                      {:check-all (rec/check-all [d] rec/every)
+                       :remembered (rec/proven-checks d)
+                       :recheck-all (rec/recheck-all [(of Item {::a 1 ::b 1})] rec/every)
+                       :seal-all (err #(rec/seal-all [(of Item {::a 1 ::b 1})]))
+                       :drafting-all (err #(rec/drafting-all [sealed] (fn [[opened]] [(assoc opened ::a 1)])))}))
+            (true? (rec/fetch on-file y)))))
+
+(deftest a-batch-run-a-check-starts-inside-a-probe-reads-the-source-itself-test
+  (let [n (atom 0)
+        failed-known {::known {:data false :blocked #{}}}
+        failed-seal (fn [data] [(:error data) (get-in data [:failures [0] :failed])])]
+    (reset! inner-batch {:sealed (map->Item {::a 0 ::b 1})})
+    (is (true? (rec/probe OuterBatch {::y 1} rec/every {on-file (answering true n)}))
+        "the override answers the probe's own read")
+    (is (= 1 @n) "and no other")
+    (is (= [{:failed failed-known :blocked #{}}] (:check-all @inner-batch)) "check-all")
+    (is (= #{::a} (:remembered @inner-batch)) "its draft does not remember a pass under the override")
+    (is (= [{:failed failed-known :blocked #{}}] (:recheck-all @inner-batch)) "recheck-all")
+    (is (= [:recognitum/drafts-failed failed-known] (failed-seal (:seal-all @inner-batch))) "seal-all")
+    (is (= [:recognitum/drafts-failed failed-known] (failed-seal (:drafting-all @inner-batch)))
+        "drafting-all")))
+
 (deftest probe-all-is-probe-of-each-in-one-run
   (let [ms [{::a 0 ::b 1} {::a 1 ::b 1} {::a 7 ::b 9} {::a 0}]]
     (reset! calls [])
@@ -333,7 +552,40 @@
           _ (binding [*ns* (the-ns 'recognitum.probe-test)]
               (eval '(recognitum.core/defproven Gone [a] recognitum.core/checks (a [] (int? a)))))]
       (is (= :recognitum/displaced-constructor (:error (err #(rec/probe old {::a 1})))))
+      (is (= (str "recognitum.probe-test/Gone was redefined: this class is of an earlier definition."
+                  " Probe the class that Gone names now in recognitum.probe-test")
+             (try (rec/probe old {::a 1}) nil (catch clojure.lang.ExceptionInfo e (ex-message e)))))
       (is (true? (rec/probe (ns-resolve 'recognitum.probe-test 'Gone) {::a 1}))))))
+
+(def seen
+  "The binding frame a check body last ran in."
+  (atom nil))
+
+(deftest a-run-without-a-probe-pays-no-binding-frame
+  (let []
+    (binding [*ns* (the-ns 'recognitum.probe-test)]
+      (eval '(recognitum.core/defproven Framed [a]
+               recognitum.core/checks
+               (a [] (do (reset! recognitum.probe-test/seen (clojure.lang.Var/getThreadBindingFrame))
+                         (true? (recognitum.core/fetch recognitum.probe-test/on-file a)))))))
+    (let [t (ns-resolve 'recognitum.probe-test 'Framed)
+          home (clojure.lang.Var/getThreadBindingFrame)]
+      (doseq [[label f] [["seal" #(rec/seal (of t {::a 0}))]
+                         ["check" #(rec/check (of t {::a 0}) rec/every)]
+                         ["check-all" #(rec/check-all [(of t {::a 0})] rec/every)]
+                         ["seal-all" #(rec/seal-all [(of t {::a 0})])]]]
+        (reset! seen nil)
+        (f)
+        (is (identical? home @seen) (str label " runs its checks in the caller's binding frame"))))
+    (testing "a read of a source with no probe allocates nothing"
+      (let [mx (java.lang.management.ManagementFactory/getThreadMXBean)
+            tid (.getId (Thread/currentThread))
+            go (fn [] (dotimes [_ 100000] (record/sourced on-file)))
+            _ (go)
+            before (.getThreadAllocatedBytes ^com.sun.management.ThreadMXBean mx tid)
+            _ (go)
+            after (.getThreadAllocatedBytes ^com.sun.management.ThreadMXBean mx tid)]
+        (is (< (- after before) 10000) (str (- after before) " bytes for 100000 reads"))))))
 
 ;;; ------------------------------------------------------------------ displaced values in seal-all
 
@@ -402,3 +654,36 @@
         (is (identical? v @got))
         (is (= {[0] :recognitum/displaced} (update-vals (:failures data) :error)))
         (is (identical? v (first (:drafts data))))))))
+
+(defn- defined-twice
+  "A value {a 1} of a type Entry that scratch namespace `nsym` defines with the check that a is
+  an int, after `between` was called with the namespace's symbol and Entry was defined there
+  again with the check that a is an int above 10. Returns the value, whether it was sealed
+  before `between`, and the error of the constructor that the name now names, given {a 1}."
+  [nsym between]
+  (let [define (fn [body]
+                 (binding [*ns* (create-ns nsym)]
+                   (refer-clojure)
+                   (eval (list 'recognitum.core/defproven 'Entry '[a] 'recognitum.core/checks (list 'a [] body)))))
+        make (fn [] (@(ns-resolve nsym 'map->Entry) {(keyword (str nsym) "a") 1}))]
+    (try
+      (define '(int? a))
+      (let [old (make)
+            sealed-before (rec/sealed? old)]
+        (between nsym)
+        (define '(and (int? a) (> a 10)))
+        {:old old :sealed-before sealed-before :now (:error (err make))})
+      (finally (remove-ns nsym)))))
+
+(deftest a-definition-displaces-the-earlier-one-whose-name-was-unmapped-or-whose-namespace-was-removed-test
+  (doseq [[label nsym between]
+          [["the namespace still maps the name" 'recognitum.probe-test.kept (fn [_])]
+           ["the name was unmapped" 'recognitum.probe-test.unmapped #(ns-unmap % 'Entry)]
+           ["the namespace was removed" 'recognitum.probe-test.removed remove-ns]]]
+    (testing label
+      (let [{:keys [old sealed-before now]} (defined-twice nsym between)]
+        (is (true? sealed-before) "sealed under the first definition")
+        (is (= :recognitum/check-failed now) "the definition the name now names refuses the old value's entries")
+        (is (false? (rec/sealed? old)))
+        (is (false? (rec/proves? old rec/every)))
+        (is (= {[0] :recognitum/displaced} (update-vals (:failures (err #(rec/seal-all [old]))) :error)))))))

@@ -54,6 +54,10 @@
     the interfaces. Without a definition, the values implement no interface of their own.
     `:unsealed true` makes the definition unsealed: its handle `build`s values and seals
     none (see [[Handle]]); the rest of the definition means what it means without the flag.
+    `:instead`, a string, is what a caller should do in place of calling the class's
+    constructor: called without the key, the constructor throws a message that names the
+    class and closes with these words, or with the strategy's own where they are nil or
+    absent. The class keeps its words after the type is redefined.
     Where [[refusal]] answers a refusal of `definition`, throws `ex-info` with that refusal
     as its data and its `:message` as its message, and defines nothing.")
   (refusal [strategy definition]
@@ -68,7 +72,8 @@
     with the map's, by default bodies, return types or print entries (`:clash`), and more,
     under kinds of its own. Needs no key and defines nothing. The answer depends on
     `definition`, on the classes the listed interfaces' names load, and on the print
-    entries, as they are when called. `:unsealed` changes no answer.")
+    entries, as they are when called. `:unsealed` changes no answer; an `:instead` that is not
+    a string or nil is refused, and so may be one too long to hold.")
   (class-name [strategy type-name]
     "The name of the class of the values of the type named `type-name`, a qualified symbol,
     the same under every definition of the type: `my.ns/T` -> `my.ns.T`. Nil for a nil

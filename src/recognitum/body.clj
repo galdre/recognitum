@@ -31,10 +31,12 @@
 ;;; ------------------------------------------------------------------ errors
 
 (defn- where [ctx]
-  (str (:where ctx) (when-let [l (:line ctx)] (str ", line " l))))
+  (str (:where ctx)
+       (when-let [c (:clause ctx)] (str ", " c))
+       (when-let [l (:line ctx)] (str ", line " l))))
 
 (defn fail!
-  "Throws the refusal of a definition, located by `ctx`'s `:where` and `:line`."
+  "Throws the refusal of a definition, located by `ctx`'s `:where`, `:clause` and `:line`."
   [ctx msg]
   (throw (ex-info (str (where ctx) ": " msg) {:error :recognitum/refused :message msg})))
 
@@ -196,6 +198,11 @@
 
 (defn- walk-all [ctx forms] (mapv #(walk ctx %) forms))
 
+(defn- a-field-word
+  "\"a field\" or \"an input\": the field word of `ctx` with its article."
+  [ctx]
+  (str (if (= "input" (:field-word ctx)) "an " "a ") (:field-word ctx)))
+
 (defn- field-list [ctx]
   (str (str/capitalize (:field-word ctx)) "s: " (str/join " " (sort (keys (:fields ctx))))))
 
@@ -210,7 +217,7 @@
         (fail! ctx (str s " is a macro: use it only in call position, as (" s " ...)")))
       (when (and (nil? v) (nil? (namespace s)) (not (special-symbol? s))
                  (not (contains? (:env ctx) s)) (not (str/includes? (name s) ".")))
-        (fail! ctx (str s " is not a " (:field-word ctx) " of " (:owner ctx)
+        (fail! ctx (str s " is not " (a-field-word ctx) " of " (:owner ctx)
                         ", a local or a var. " (field-list ctx))))
       s)))
 
@@ -227,7 +234,7 @@
     (fail! ctx (if (read-names h)
                  (str "(" h " ...) calls " h ", which names nothing here. To use the body macro, write"
                       " (rec/" h " ...) with recognitum.core required as rec, or refer it")
-                 (str "(" h " ...) calls " h ", which is not a " (:field-word ctx) " of " (:owner ctx)
+                 (str "(" h " ...) calls " h ", which is not " (a-field-word ctx) " of " (:owner ctx)
                       ", a local or a var. " (field-list ctx))))))
 
 (defn- arities
@@ -324,7 +331,7 @@
             (list* op (first args) (walk-all ctx (rest args))))
     set! (let [[target v] args]
            (when (field? ctx target)
-             (fail! ctx (str "set! of " target ": a check body cannot assign a " (:field-word ctx))))
+             (fail! ctx (str "set! of " target ": a check body cannot assign " (a-field-word ctx))))
            (list op (walk ctx target) (walk ctx v)))
     reify*
     (let [[ifaces & methods] args
@@ -343,9 +350,9 @@
     (or more (empty? args) (not (symbol? f)))
     (fail! ctx (str h " takes one " (:field-word ctx) ": " (pr-str form)))
     (local? ctx f)
-    (fail! ctx (str h " on " f ", which is a local here, not a " (:field-word ctx)))
+    (fail! ctx (str h " on " f ", which is a local here, not " (a-field-word ctx)))
     (not (field? ctx f))
-    (fail! ctx (str h " on " f ", which is not a " (:field-word ctx) " of " (:owner ctx)
+    (fail! ctx (str h " on " f ", which is not " (a-field-word ctx) " of " (:owner ctx)
                     ". " (field-list ctx)))
     :else
     (do (refuse-in-deftype! ctx f)
@@ -458,8 +465,8 @@
 
   - `:fields`, a map from each field (or input) symbol in scope to its key, and `:required`,
     the set of those always present;
-  - `:owner`, the type or bundle, `:field-word` (\"field\" or \"input\"), `:where` and
-    `:line`, for messages;
+  - `:owner`, the type or bundle, `:field-word` (\"field\" or \"input\"), `:where`,
+    `:clause` (the check or input clause, as `check name`) and `:line`, for messages;
   - `:call-env`, the defining macro's own `&env`;
   - `:read-macros`, a map from the symbol of each body macro's var to the kind of read it is:
     `:fetch`, `:fetch-each`, `:extant?` or `:when-extant`;

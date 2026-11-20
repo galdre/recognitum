@@ -73,6 +73,56 @@
     (is (= #{::on-file ::each-on-file} (set (keys (:failed e)))))
     (is (false? (get-in e [:failed ::on-file :data])))))
 
+(def ^:private to-throw (atom nil))
+
+(defn- flaky [_] (throw @to-throw))
+
+(rec/defproven Flaky [n]
+  rec/checks
+  (on-file [] (rec/fetch flaky n)))
+
+(defn- flaky-failure
+  "The failure data of check on-file where `flaky` throws `t`, as the constructor reports it."
+  [t]
+  (reset! to-throw t)
+  (get-in (err #(map->Flaky {::n 1})) [:failed ::on-file :data]))
+
+(deftest an-exception-from-a-source-fails-the-check
+  (doseq [t [(Exception. "down") (ex-info "down" {:k 1})]]
+    (is (= {:fetch-failed flaky :cause t} (flaky-failure t)) (pr-str t))))
+
+(deftest an-interrupted-read-fails-the-check-and-leaves-the-thread-interrupted
+  (let [t (InterruptedException. "stop")]
+    (try
+      (let [failure (flaky-failure t)]
+        (is (Thread/interrupted) "after the constructor")
+        (is (= {:fetch-failed flaky :cause t} failure)))
+      (let [[a b] (rec/check-all [(assoc (rec/draft Flaky) ::n 1) (assoc (rec/draft Flaky) ::n 2)] rec/every)]
+        (is (Thread/interrupted) "after check-all")
+        (is (= [{:fetch-failed flaky :cause t} {:fetch-failed flaky :cause t}]
+               [(get-in a [:failed ::on-file :data]) (get-in b [:failed ::on-file :data])])))
+      (let [override (fn [_] (throw t))
+            r (rec/probe Flaky {::n 1} rec/every {flaky override})]
+        (is (Thread/interrupted) "after a probe whose override throws")
+        (is (= {:fetch-failed override :cause t} (get-in r [:failed ::on-file :data]))))
+      (finally (Thread/interrupted)))))
+
+(defn- strict [ks] {:pre [(every? pos? ks)]} (zipmap ks (repeat true)))
+
+(rec/defproven Strict [n]
+  rec/checks
+  (n [] (int? n))
+  (on-file [n] (rec/fetch strict n)))
+
+(deftest an-error-from-a-source-propagates
+  (let [d (assoc (rec/draft Strict) ::n 0)]
+    (is (thrown? AssertionError (map->Strict {::n 0})) "out of the constructor")
+    (is (thrown? AssertionError (rec/check d rec/every)) "out of check")
+    (is (thrown? AssertionError (rec/check-all [(assoc (rec/draft Strict) ::n 1) d] rec/every))
+        "out of check-all")
+    (is (thrown? AssertionError (rec/probe Strict {::n 0})) "out of probe")
+    (is (thrown? AssertionError (rec/seal-all [d])) "out of seal-all")))
+
 (deftest the-body-macros-throw-outside-a-check-body
   (doseq [form ['(recognitum.core/fetch on-file 1)
                 '(recognitum.core/fetch-each on-file [1])
@@ -171,6 +221,43 @@
                       ['(rec/extant? nothing) #"rec/extant\? on nothing, which is not a field of BadExtant\. Fields: n o"]]]
     (is (re-find msg (str (refusal (list 'rec/defproven 'BadExtant ['n (with-meta 'o {:optional true})] 'rec/checks (list 'c [] body)))))
         (pr-str body))))
+
+(defn- refused-with
+  "The `:message` of the refusal of `form`, evaluated in this namespace, or nil when it is
+  accepted."
+  [form]
+  (try (binding [*ns* (the-ns 'recognitum.body-test)] (eval form)) nil
+       (catch clojure.lang.Compiler$CompilerException e (:message (ex-data (ex-cause e))))))
+
+(deftest a-refusal-in-a-bundle-names-an-input-with-its-article
+  (doseq [[body msg] [['(string? crwe) "crwe is not an input of Misread, a local or a var. Inputs: crew"]
+                      ['(crwe 1) "(crwe ...) calls crwe, which is not an input of Misread, a local or a var. Inputs: crew"]
+                      ['(let [x crew] (rec/extant? x)) "rec/extant? on x, which is a local here, not an input"]
+                      ['(rec/extant? crwe) "rec/extant? on crwe, which is not an input of Misread. Inputs: crew"]
+                      ['(set! crew 1) "set! of crew: a check body cannot assign an input"]]]
+    (is (= msg (refused-with (list 'rec/defchecks 'Misread '[crew] 'rec/checks (list 'c [] body))))
+        (pr-str body))))
+
+(rec/defchecks listed [crew]
+  rec/checks
+  (listed-crew [] (vector? crew)))
+
+(defn- refusal-of
+  "The exception refusing `form`, evaluated in this namespace, or nil when it is accepted."
+  [form]
+  (try (binding [*ns* (the-ns 'recognitum.body-test)] (eval form)) nil
+       (catch clojure.lang.Compiler$CompilerException e (ex-cause e))))
+
+(deftest a-refusal-of-a-body-names-the-check-it-is-in
+  (let [e (refusal-of '(rec/defproven Misspelt [name crew] rec/checks (name [] (string? nmae))))]
+    (is (re-matches #"recognitum\.body-test/Misspelt, check name, line \d+: nmae is not a field of Misspelt, a local or a var\. Fields: crew name"
+                    (ex-message e)))
+    (is (= {:error :recognitum/refused :message "nmae is not a field of Misspelt, a local or a var. Fields: crew name"}
+           (ex-data e))))
+  (is (re-matches #"recognitum\.body-test/misread-inputs, check vetted, line \d+: crwe is not an input of misread-inputs, a local or a var\. Inputs: crew"
+                  (ex-message (refusal-of '(rec/defchecks misread-inputs [crew] rec/checks (vetted [] (every? string? crwe)))))))
+  (is (re-matches #"recognitum\.body-test/Misbound, input clause crew of listed, line \d+: crwe is not a field of Misbound, a local or a var\. Fields: crew name"
+                  (ex-message (refusal-of '(rec/defproven Misbound [name crew] listed (crew [] crwe)))))))
 
 ;;; Reads inside a fn, a try or a reify the body builds count as reads.
 
@@ -433,6 +520,37 @@
             #"rec/fetch inside a fn the check body builds"]]]
     (is (re-find msg (str (refusal (list 'rec/defproven 'Waiting '[n] 'rec/checks (list 'c [] body)))))
         (pr-str body))))
+
+(def ^:private built
+  "Each form a check body may build a fn with, around `x`."
+  {:fn       (fn [x] (list (list 'fn [] x)))
+   :literal  (fn [x] (list (list 'fn* [] x)))
+   :for      (fn [x] (list 'first (list 'for '[_ [1]] x)))
+   :lazy-seq (fn [x] (list 'first (list 'lazy-seq (list 'list x))))
+   :delay    (fn [x] (list 'deref (list 'delay x)))})
+
+(deftest both-reads-are-refused-inside-each-fn-a-body-builds
+  (doseq [[form wrap] built
+          read ['(rec/fetch on-file n) '(rec/fetch-each on-file [n])]]
+    (is (re-find #"inside a fn the check body builds"
+                 (str (refusal (list 'rec/defproven 'Built '[n] 'rec/checks (list 'c [] (wrap read))))))
+        (pr-str form read))))
+
+(def ^:private presence (atom {}))
+
+(rec/defproven Presence [^:optional o]
+  rec/checks
+  (in-fn [] (do (swap! presence assoc :fn ((fn [] [(rec/extant? o) (rec/when-extant o :present)]))) true))
+  (in-literal [] (do (swap! presence assoc :literal (#(vector (rec/extant? o) (rec/when-extant o :present)))) true))
+  (in-for [] (do (swap! presence assoc :for (first (for [_ [1]] [(rec/extant? o) (rec/when-extant o :present)]))) true))
+  (in-lazy-seq [] (do (swap! presence assoc :lazy-seq (first (lazy-seq (list [(rec/extant? o) (rec/when-extant o :present)])))) true))
+  (in-delay [] (do (swap! presence assoc :delay @(delay [(rec/extant? o) (rec/when-extant o :present)])) true)))
+
+(deftest the-presence-macros-answer-inside-each-fn-a-body-builds
+  (doseq [[m expected] [[{} [false true]] [{::o 1} [true :present]]]]
+    (reset! presence {})
+    (is (instance? Presence (map->Presence m)))
+    (is (= (zipmap (keys built) (repeat expected)) @presence) (pr-str m))))
 
 (rec/defproven Locals [n]
   rec/checks

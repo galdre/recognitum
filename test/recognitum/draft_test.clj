@@ -93,7 +93,7 @@
 
 (deftest marks-moved-onto-other-entries-show-nothing
   (let [d (rec/draft h/italian-job)
-        forged (Draft. (assoc entries ::h/take -1) (.-cell ^Draft d) nil)]
+        forged (Draft. (assoc entries ::h/take -1) (.-cell ^Draft d) nil 0)]
     (is (= #{} (rec/proven-checks forged)))
     (is (= :recognitum/check-failed (:error (err #(rec/seal forged)))))))
 
@@ -103,7 +103,7 @@
   (let [t (record/type-of Heist)
         copy (assoc t :recognitum.record/class clojure.lang.PersistentArrayMap)
         bad (assoc entries ::h/take -1)
-        forged (Draft. bad (atom (Memo. copy bad (:ids t) #{} bad nil)) nil)]
+        forged (Draft. bad (atom (Memo. copy bad (:ids t) #{} bad nil)) nil 0)]
     (is (nil? (:name (record/type-of forged))))
     (is (false? (rec/proves? forged rec/every)))
     (is (= :recognitum/not-a-type (:error (err #(rec/proven-checks forged)))))
@@ -239,7 +239,7 @@
                                (object-array 0))]
     (doseq [[what proof] [["another value" h/italian-job] ["the entries" bad] ["an unmarked draft" unmarked]]]
       (testing what
-        (let [forged (Draft. bad (atom (Memo. t bad (:ids t) #{} proof all)) nil)]
+        (let [forged (Draft. bad (atom (Memo. t bad (:ids t) #{} proof all)) nil 0)]
           (is (= #{} (rec/proven-checks forged)))
           (is (map? (first (rec/check-all [forged] rec/every))))
           (is (= :recognitum/check-failed (:error (err #(rec/seal forged))))))))))
@@ -392,13 +392,13 @@
     (is (= #{[0 0]} (set (keys (:failures (err #(rec/seal-all [(first {bad :v})])))))) "a key's is 0")))
 
 (deftest a-collection-the-walk-does-not-enter-holds-no-draft
-  ;; A queue is neither a vector nor a sequence: the walk leaves it as it is, so a draft holding
-  ;; one is of the lowest level and shares the others' source call.
+  ;; The walk does not enter a Java list: it leaves the list as it is, so a draft holding one is
+  ;; of the lowest level and shares the others' source call.
   (reset! house/calls [])
-  (let [q (conj clojure.lang.PersistentQueue/EMPTY 1)
-        e (err #(rec/seal-all [(heist-draft) (assoc (heist-draft) ::h/getaway q)]))]
+  (let [l (java.util.ArrayList. [(heist-draft)])
+        e (err #(rec/seal-all [(heist-draft) (assoc (heist-draft) ::h/getaway l)]))]
     (is (= #{[1]} (set (keys (:failures e)))))
-    (is (identical? q (get-in e [:drafts 1 ::h/getaway])))
+    (is (identical? l (get-in e [:drafts 1 ::h/getaway])))
     (is (= 1 (count @house/calls)))))
 
 ;;; ------------------------------------------------------------------ edge cases
@@ -556,3 +556,100 @@
     (is (identical? by-item (.comparator ^clojure.lang.Sorted (:keys out))))
     (is (identical? by-item (.comparator ^clojure.lang.Sorted (:set-by out))))
     (is (= [m m m] (map (comp meta out) [:record :set-by :list])))))
+
+;;; ------------------------------------------------------------------ the walk over queues, and what it does not search
+
+(defn- queue [& xs] (into clojure.lang.PersistentQueue/EMPTY xs))
+
+(deftest seal-all-seals-the-drafts-in-a-queue
+  (doseq [[where shape in] [["alone" #(queue (tray 1) 2) identity]
+                            ["in a vector" #(vector (queue (tray 1) 2)) first]
+                            ["in a map in a list" #(list {:k (queue (tray 1) 2)}) (comp :k first)]]]
+    (testing where
+      (let [out (in (rec/seal-all (shape)))]
+        (is (vector? out) "a queue comes back a vector")
+        (is (sealed-tray? (first out)))
+        (is (= 2 (second out))))))
+  (testing "in a draft's field, the draft is checked holding the queue's sealed values"
+    (let [[out] (rec/seal-all [(tray (queue (tray 1)))])]
+      (is (sealed-tray? out))
+      (is (sealed-tray? (first (::item out))))))
+  (testing "a draft that fails is reported at its index, and :drafts holds it"
+    (let [e (err #(rec/seal-all {:q (with-meta (queue 0 (failing-tray)) {:m 1})}))]
+      (is (= :recognitum/drafts-failed (:error e)))
+      (is (= #{[:q 1]} (set (keys (:failures e)))))
+      (is (rec/draft? (get-in e [:drafts :q 1])))
+      (is (= {:m 1} (meta (get-in e [:drafts :q]))) "the vector carries the queue's metadata"))))
+
+(deftest drafting-all-seals-what-it-opened-in-a-queue
+  (let [v (rec/seal (tray 1))
+        seen (atom nil)
+        [out] (rec/drafting-all (queue v) (fn [s] (reset! seen s) s))]
+    (is (rec/draft? (first @seen)) "f gets the value opened")
+    (is (sealed-tray? out)))
+  (testing "a write made in f is checked"
+    (let [e (err #(rec/drafting-all (queue (rec/seal (tray 1))) (fn [s] (mapv (fn [d] (assoc d ::item nil)) s))))]
+      (is (= :recognitum/drafts-failed (:error e)))
+      (is (= #{[0]} (set (keys (:failures e))))))))
+
+(deftest seal-all-walks-a-subvector
+  (let [out (rec/seal-all (subvec [0 (tray 1) 2] 1 3))]
+    (is (vector? out))
+    (is (sealed-tray? (first out)))
+    (is (= 2 (second out)))))
+
+(deftype Opaque [held])
+
+(deftype Bag [held]
+  clojure.lang.IPersistentCollection
+  (count [_] 1)
+  (cons [_ x] (Bag. x))
+  (empty [_] (Bag. nil))
+  (equiv [this other] (identical? this other))
+  (seq [_] (list held)))
+
+(deftest seal-all-does-not-search-what-it-does-not-rebuild
+  (doseq [[what holding held] [["a Java list"            #(java.util.ArrayList. [%]) #(.get ^java.util.List % 0)]
+                               ["a Java map"             #(java.util.HashMap. {:k %}) #(.get ^java.util.Map % :k)]
+                               ["an array"               #(object-array [%]) #(aget ^objects % 0)]
+                               ["an atom"                atom deref]
+                               ["an object of a deftype" #(Opaque. %) #(.-held ^Opaque %)]
+                               ["a collection of a deftype" #(Bag. %) #(.-held ^Bag %)]]]
+    (testing what
+      (let [d (tray 1)
+            holder (holding d)]
+        (is (identical? holder (first (rec/seal-all [holder]))) "it comes back as it is")
+        (is (identical? d (held holder)) "holding the draft, still a draft")
+        (is (rec/draft? d)))
+      (testing "and a draft in it that would fail raises nothing"
+        (let [holder (holding (failing-tray))]
+          (is (identical? holder (rec/seal-all holder)))))
+      (testing "and drafting-all does not open a sealed value in it"
+        (let [v (rec/seal (tray 1))
+              holder (holding v)
+              seen (atom nil)
+              out (rec/drafting-all [holder] (fn [s] (reset! seen s) s))]
+          (is (identical? holder (first @seen)))
+          (is (identical? holder (first out)))
+          (is (identical? v (held holder))))))))
+
+(deftest a-collection-of-another-kind-holds-no-draft
+  ;; A collection that is no map, set, vector, sequence or queue is `coll?`, and the walk still
+  ;; does not enter it: a draft holding one is of the lowest level, so it is sealed with the
+  ;; other drafts of that level, in one call of the source.
+  (testing "a draft holding one is sealed, holding it as it is"
+    (let [d (tray 1)
+          bag (Bag. d)
+          [out] (rec/seal-all [(tray bag)])]
+      (is (sealed-tray? out))
+      (is (identical? bag (::item out)))
+      (is (identical? d (.-held bag)))
+      (is (rec/draft? d))))
+  (testing "and shares the source call of a draft that holds nothing"
+    (reset! house/calls [])
+    (let [bag (Bag. (heist-draft))
+          e (err #(rec/seal-all [(heist-draft) (assoc (heist-draft) ::h/getaway bag)]))]
+      (is (= #{[1]} (set (keys (:failures e)))) "a bag is no driver's name")
+      (is (identical? bag (get-in e [:drafts 1 ::h/getaway])))
+      (is (rec/draft? (.-held bag)))
+      (is (= 1 (count @house/calls))))))
