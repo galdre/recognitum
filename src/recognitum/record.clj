@@ -178,7 +178,7 @@
   checks known to pass leaves, `known` as a set. Where none of those reads a source, the
   runner over them, kept in `runs` under `km`; past 1000 masks, a mask not kept runs every
   check but the known through `run*`, building nothing."
-  [^java.util.concurrent.ConcurrentHashMap runs fetching-m runner engine hot all-mask run*]
+  [{:keys [fetching-m runner engine hot all-mask run*]} ^java.util.concurrent.ConcurrentHashMap runs]
   (fn [^long km known]
     (or (.get runs km)
         (if (and (< (.size runs) 1000) (zero? (bit-and-not (long fetching-m) km)))
@@ -202,7 +202,7 @@
 (defn- make-lacks?
   "The `(lacks? data)` of a type: whether `data` lacks one of the required fields
   `required-v`."
-  [required-v]
+  [{:keys [required-v]}]
   (fn [data] (not (reduce (fn [_ k] (if (contains? data k) true (reduced false))) true required-v))))
 
 (defn- make-refuse!
@@ -218,7 +218,7 @@
 (defn- make-own!
   "The `(own! old)` of `type`: refuses `old` where it is not a value of the class `vc`, or
   where `current`, a volatile, holds false."
-  [vc type current]
+  [{:keys [vc type current]}]
   (fn [old]
     (when-not (instance? vc old)
       (throw (ex-info (str "a write starts from a value of " (:name type))
@@ -248,7 +248,7 @@
   "The `(own-value v)` of an unsealed `type`: the memory cell of `v`, a value of the class `vc`,
   which `strategy` holds; refuses anything else, and `v` where `current`, a volatile, holds
   false."
-  [vc type current strategy]
+  [{:keys [vc type current strategy]}]
   (fn [v]
     (when-not (instance? vc v)
       (throw (ex-info (str "not a value of " (:name type) ": " (pr-str v))
@@ -260,7 +260,7 @@
 (defn- make-own-subject
   "The `(own-subject x)` of `type`: what a run reads of `x`, a draft or, where `unsealed?`, a
   value of `type`, as `[entries passes memory cell]`, the cell the one that holds the memory."
-  [unsealed? type own-value own-memo]
+  [{:keys [unsealed? type]} own-value own-memo]
   (fn [x]
     (if unsealed?
       (let [cell (own-value x)
@@ -274,7 +274,7 @@
   "The `(own-for-seal d)` of `type`: of `d`, a draft of `type`, its entries, what it passes, its
   memory, whether it passes every check, and a run of the checks left; through the mask where
   `masks?`."
-  [masks? type ids hot all-mask own-memo own-draft run-known run*]
+  [{:keys [masks? type ids hot all-mask run*]} own-memo own-draft run-known]
   (fn [d]
     (if masks?
       (let [m (own-memo d)
@@ -294,7 +294,8 @@
   check's, `:recheck` for recheck's, `:seal` for seal's (check's, with the floor of each
   value). This type's group comes first; each other type's gate takes its own. Each draft or
   value is read once, and runs where it has anything to run."
-  [masks? unsealed? type ids hot engine all-mask closure-of fetching-in own-memo own-subject remember! remember-m!]
+  [{:keys [masks? unsealed? type ids hot engine all-mask]} closure-of fetching-in own-memo own-subject remember!
+   remember-m!]
   (fn [groups entries]
     (let [[[picked xs is kind] & more] groups
           [closed closed-m] (closure-of picked)
@@ -337,7 +338,7 @@
   "The `(run-checks cache-key changes)` of a type without masks: a runner of the readers of the
   keys of `changes`, kept in `change-runs` under `cache-key`; past 1000, a set not kept is
   built anew."
-  [^java.util.concurrent.ConcurrentHashMap change-runs runner engine readers-v]
+  [{:keys [runner engine readers-v]} ^java.util.concurrent.ConcurrentHashMap change-runs]
   (fn [cache-key changes]
     (or (.get change-runs cache-key)
         (let [r (runner engine (reduce (fn [a k] (into a (readers-v k []))) #{} (keys changes)))]
@@ -348,7 +349,7 @@
   "The `(whole-change old changes may-lack?)` of a type: a change of a key whose readers read a
   source runs every check that reads a key changed, on the view of `old` with `changes`
   applied, and refuses as `refuse!` does."
-  [masks? ids hot all-mask readers-m readers-v removed refuse! run*]
+  [{:keys [masks? ids hot all-mask readers-m readers-v removed run*]} refuse!]
   (fn [old changes may-lack?]
     (let [view (Changed. old changes removed)]
       (refuse! view
@@ -365,7 +366,7 @@
   where a key changed has readers that read a source, it is `whole-change`. `key-guards` maps
   each declared key to its guard, or to `none`; `key-bits`, where a type without masks has
   one, each declared key to a bit."
-  [masks? type hot all-mask readers-m readers-v required removed ^java.util.IdentityHashMap key-guards
+  [{:keys [masks? type hot all-mask readers-m readers-v required removed]} ^java.util.IdentityHashMap key-guards
    key-bits refuse! whole-change run-known run-checks]
   (fn [old ^clojure.lang.IPersistentMap changes]
     (let [view (Changed. old changes removed)
@@ -404,7 +405,7 @@
   "The `(seal-value v picked)` of an unsealed `type`, which seals `v`, a value of `type`, against
   the checks `picked`: it runs them, what they wait on and the floor, less what `v` passes,
   remembers the run, and returns `v` or throws."
-  [type ids own-subject remember! refuse!]
+  [{:keys [type ids]} own-subject remember! refuse!]
   (fn [v picked]
     (let [[data known m0 cell] (own-subject v)
           to-run (minus (select/closure type (into (set/intersection ids (set picked))
@@ -438,7 +439,7 @@
   for a draft `d`, with nothing more to forget; `km` the mask of the checks known to pass, `tm`
   of those run. `memo-m` makes a memory from a mask; it is the only part that holds the type's
   key. `bits-of` and `key-bits-of` give the mask of a collection of ids and of a map's keys."
-  [type memo-m bits-of key-bits-of]
+  [{:keys [type bits-of key-bits-of]} memo-m]
   (fn [^Draft d m0 km tm result]
     (let [data (.-data d)
           km (long km)
@@ -453,11 +454,272 @@
   "The `(run-draft to-run subject forget)` of `type`: runs the checks `to-run` on the entries of
   `subject`, `[data known m0 cell]` as an own-subject answers it, remembers the run through
   `remember!`, and returns its result."
-  [type ids remember!]
+  [{:keys [type ids]} remember!]
   (fn [to-run [data known m0 cell] forget]
     (let [result (run type data (set/difference ids to-run))]
       (remember! cell data m0 known to-run result forget)
       result)))
+
+(defn- make-methods
+  "The `:methods` of `spec` as the proof strategy's definition takes them: each signature, to
+  the function its maker returns, given `current` and a `refuse` that throws the refusal of a
+  displaced value, or of a displaced unsealed one where `unsealed?`. `toString` of no
+  parameters is given a `current` that always holds true."
+  [spec unsealed? current]
+  (let [refuse (fn [v] (throw (if unsealed?
+                                (displaced-unsealed (:name spec) v)
+                                (displaced-refusal (:name spec) v))))]
+    (into {} (for [[[n ps :as sig] make] (:methods spec)]
+               [sig (if (and (= "toString" n) (empty? ps))
+                      (make (volatile! true) refuse)
+                      (make current refuse))]))))
+
+(defn- make-definition
+  "The definition of `spec` as the proof strategy takes it: its keys, interfaces, methods (as
+  [[make-methods]] makes them) and `:instead`, and `:unsealed` where `unsealed?`."
+  [spec unsealed? current]
+  (cond-> {:keys (mapv :key (:fields spec))
+           :interfaces (vec (:interfaces spec))
+           :methods (make-methods spec unsealed? current)
+           :instead (:instead spec)}
+    unsealed? (assoc :unsealed true)))
+
+(defn- make-type
+  "The type map of `spec`, as [[compile-type]] compiles it, with the classes `vc` of its values
+  and `dc` of its drafts, an empty gate, whether it is `unsealed?`, and its `Hot`."
+  [spec strategy define run-all runner vc dc unsealed?]
+  (let [t (compile-type spec strategy define run-all runner)]
+    ;; an unsealed type's memories never show every check passing through a value of
+    ;; its class: its `Hot` names Void, of which nothing is an instance
+    (assoc t ::class vc ::draft-class dc ::gate (volatile! nil) ::unsealed unsealed?
+           ::hot (hot-of (if unsealed? Void vc) dc strategy (:ids t) (:readers t) (::readers-v t)))))
+
+(defn- make-bits-of
+  "The `(bits-of xs)` of a type with masks: the mask of the ids in `xs`, a collection, each id's
+  bit as `bits` gives it."
+  [bits]
+  (fn ^long [xs] (reduce (fn [^long a id] (bit-or a (long (bits id)))) 0 xs)))
+
+(defn- make-key-bits-of
+  "The `(key-bits-of m)` of a type with masks: the mask of the keys of `m`, a map of ids, each
+  id's bit as `bits` gives it."
+  [bits]
+  (fn ^long [m] (reduce-kv (fn [^long a id _] (bit-or a (long (bits id)))) 0 m)))
+
+(defn- make-run-of
+  "The `run-of` of `type`: each key of `declared` whose readers, as `readers` maps each key to
+  them, read no source, to a run of those readers alone, by `runner` over `engine`."
+  [{:keys [type declared readers runner engine]}]
+  (into {} (for [k declared
+                 :let [rs (get readers k #{})]
+                 :when (not-any? #(:fetches? ((:by-id type) %)) rs)]
+             [k (runner engine rs)])))
+
+(defn- make-closure-of
+  "The `(closure-of picked)` of `type`: of a set of checks picked, the closure of its checks of
+  this type, as a set and as a mask or nil, kept in `closures` under `picked`. Past 1000, a set
+  not kept is closed anew."
+  [{:keys [type ids hot]} ^java.util.concurrent.ConcurrentHashMap closures]
+  (fn [picked]
+    (or (.get closures picked)
+        (let [closed (select/closure type (set/intersection ids (set picked)))
+              c [closed (mask-of hot closed)]]
+          (when (< (.size closures) 1000) (.putIfAbsent closures picked c))
+          c))))
+
+(defn- make-fetching-in
+  "The `(fetching-in picked)` of `type`: the checks of `picked` that read a source."
+  [type]
+  (fn [picked] (filter #(:fetches? ((:by-id type) %)) picked)))
+
+(defn- make-guards
+  "The `guards` of `type`: each key of `run-of`, whose readers read no source, to its guard,
+  made by the guard maker of `spec`: an assoc of the key runs those readers on the old value
+  with the key set, and throws what the change would throw."
+  [spec {:keys [type current]} run-of clean?]
+  (let [make (or (:guard spec) (guard-maker With))
+        refuse (fn [old result]
+                 (throw (if result
+                          (check-failed type (report type result))
+                          (displaced-refusal (:name type) old))))]
+    (into {} (for [[k r] run-of] [k (make current r k clean? refuse)]))))
+
+(defn- make-key-guards
+  "The `key-guards` of a type: an IdentityHashMap from each key of `declared` to its guard in
+  `guards`, or to `none` where its readers read a source."
+  [{:keys [declared]} guards]
+  (let [m (java.util.IdentityHashMap.)]
+    (doseq [k declared] (.put m k (get guards k none)))
+    m))
+
+(defn- make-key-bits
+  "The `key-bits` of a type: for a type without masks, an IdentityHashMap from each key of
+  `declared` to a bit of a long, where it declares at most 64; else nil."
+  [{:keys [masks? declared]}]
+  (when (and (not masks?) (<= (count declared) 64))
+    (let [m (java.util.IdentityHashMap.)]
+      (doseq [[i k] (map-indexed vector (sort-by str declared))] (.put m k (bit-shift-left 1 i)))
+      m)))
+
+(defn- make-carry
+  "The `(carry old changes)` of an unsealed `type`: the memory cell of the value a change of
+  `old` makes, `old` refused as `own-value` refuses it, and `changes` as an undeclared key
+  refuses them. The new value remembers what `old` remembered, and the keys the change writes."
+  [type own-value]
+  (fn [old changes]
+    (let [cell (own-value old)]
+      (refuse-undeclared! type (keys changes))
+      (let [mo @cell]
+        (atom (if (and (instance? Memo mo) (some? (.-proof ^Memo mo)))
+                (let [^Memo mo mo]
+                  (Memo. (.-type mo) (.-base mo) (.-passes mo) (into (.-written mo) (keys changes))
+                         (.-proof mo) (.-mask mo)))
+                mo))))))
+
+(defn- parts-of
+  "What the builders of a type's functions read: `type`, the type map; `strategy`, `runner`,
+  the class `vc` of its values, whether it is `unsealed?`, and `current`, as [[define-type]]
+  has them; and what they read of the type map and its `Hot`, each under the name of its key."
+  [type strategy runner vc unsealed? current]
+  (let [ids (:ids type)
+        ^Hot hot (::hot type)
+        masks? (some? (.-bits hot))
+        all-mask (.-all hot)
+        bits (.-bits hot)
+        bits-of (make-bits-of bits)
+        key-bits-of (make-key-bits-of bits)
+        engine (:engine type)
+        run* (::run type)
+        declared (:keys type)
+        declared? (member-of declared)
+        required-v (::required-v type)
+        required (:required type)
+        readers (:readers type)
+        readers-v (::readers-v type)
+        removed (proof/removed strategy)
+        fetching-m (when masks? (mask-of hot (filter #(:fetches? ((:by-id type) %)) ids)))
+        readers-m (.-readers-m hot)]
+    {:type type :strategy strategy :runner runner :vc vc :unsealed? unsealed? :current current
+     :ids ids :hot hot :masks? masks? :all-mask all-mask :bits bits :bits-of bits-of
+     :key-bits-of key-bits-of :engine engine :run* run* :declared declared :declared? declared?
+     :required-v required-v :required required :readers readers :readers-v readers-v
+     :removed removed :fetching-m fetching-m :readers-m readers-m}))
+
+(defn- make-construct
+  "The `(construct x y)` of `type`: a value of the entries `x`, for the constructor `y`. It
+  refuses where `current`, a volatile, holds false, and where `x` has a key `declared?` denies.
+  Where `unsealed?`, `build` makes the value of the entries; else every check runs through
+  `run*`, and `seal!` seals the entries with the result."
+  [{:keys [type current declared? unsealed? run*]} build seal!]
+  (fn [x y]
+    (let [data (proof/plain-map x)]
+      (when-not (.deref ^clojure.lang.Volatile current)
+        (throw (displaced-constructor (:name type) y)))
+      (when-not (all-declared? declared? data) (refuse-undeclared! type (keys data)))
+      (if unsealed?
+        (build data)
+        (seal! data (run* data #{}) true)))))
+
+(defn- make-seal
+  "The `(seal x y)` of `type`. Where `unsealed?`, `seal-value` of the value `x` against the
+  checks `y`. Else the seal of the draft `x`, as `own-for-seal` reads it: it refuses where
+  `current`, a volatile, holds false, and where the draft has a key `declared?` denies, then
+  runs the checks the draft is not known to pass. Where one fails or a required field is
+  absent (`clean?`, `lacks?`), it remembers the run through `remember!` and throws; else it
+  returns the draft's entries sealed by `seal-data`, and the draft remembers that every check
+  passes."
+  [{:keys [unsealed? type ids all-mask current declared?]} clean? lacks? remember! own-for-seal seal-value seal-data]
+  (fn [x y]
+    (if unsealed?
+      (seal-value x y)
+      (let [[data known m0 all-pass? run-left] (own-for-seal x)]
+        (when-not (.deref ^clojure.lang.Volatile current)
+          (throw (displaced-draft (:name type))))
+        (when-not (all-declared? declared? data) (refuse-undeclared! type (keys data)))
+        ;; a draft that passes every check runs none
+        (let [result (when-not all-pass? (run-left data))
+              rep (when-not (or all-pass? (clean? result)) (report type result))]
+          (if (or rep (lacks? data))
+            (do (remember! (.-cell ^Draft x) data m0 known (minus ids known) result)
+                (throw (check-failed type rep (missing type data))))
+            ;; every check passes: the value sealed is the draft's proof. Where
+            ;; another run has written since, there is nothing failed to forget.
+            (let [v (seal-data (with-meta-of data x))]
+              (when-not all-pass?
+                (compare-and-set! (.-cell ^Draft x) m0 (Memo. type v ids #{} v all-mask)))
+              v)))))))
+
+(defn- make-draft-of
+  "The `(draft-of x)` of `type`: a draft of `x`, a value of the class `vc`, whose memory shows
+  every check passing through `x`. Refuses where `unsealed?`, and refuses anything else."
+  [{:keys [unsealed? type vc ids all-mask]}]
+  (fn [x]
+    (cond unsealed? (throw (no-drafts (:name type)))
+          (instance? vc x) (Draft. (proof/plain-map x) (atom (Memo. type x ids #{} x all-mask)) (meta x) 0)
+          :else (throw (ex-info (str "not a value of " (:name type)) {:error :recognitum/not-a-value})))))
+
+(defn- make-rewrite
+  "The `(rewrite x y)` of a type: the draft `x` with the entries `y`, or `x` itself where they
+  change nothing. Refuses what `own-draft` refuses."
+  [own-draft]
+  (fn [x y]
+    (let [[data] (own-draft x)
+          y (proof/plain-map y)
+          changed (changed-keys data y)]
+      (if (empty? changed)
+        x
+        (rewritten x y #(into % changed) (odd-after x y changed))))))
+
+(defn- make-clean-draft
+  "The `(clean-draft x)` of `type`: the draft `x` without the keys `type` does not declare, or
+  `x` itself where it has none. Refuses where `unsealed?`, and what `own-draft` refuses."
+  [{:keys [unsealed? type]} own-draft]
+  (fn [x]
+    (let [_ (when unsealed? (throw (no-drafts (:name type))))
+          [data] (own-draft x)
+          kept (select-keys data (:keys type))]
+      (if (= (count kept) (count data))
+        x
+        (rewritten x kept #(into % (remove (:keys type)) (keys data)) 0)))))
+
+(defn- make-check
+  "The `(check x y)` of `type`: on `x`, a draft or, where the type is unsealed, a value, as
+  `own-subject` reads it, runs the checks of `type` that `y` names and what they wait on, less
+  those `x` is known to pass, through `run-draft`, and returns the run's result."
+  [{:keys [type ids]} own-subject run-draft]
+  (fn [x y]
+    (let [[_ known :as own] (own-subject x)
+          named (set/intersection ids (set y))]
+      (run-draft (minus (select/closure type named) known) own ()))))
+
+(defn- make-recheck
+  "The `(recheck x y)` of `type`: as [[make-check]]'s function, but the checks `y` names run
+  whether or not `x` is known to pass them. Of those, the ones that read a source, as
+  `fetching-in` finds them, are forgotten, and remembered again only where this run passes them."
+  [{:keys [type ids]} own-subject run-draft fetching-in]
+  (fn [x y]
+    (let [[_ known :as own] (own-subject x)
+          named (set/intersection ids (set y))]
+      ;; a named check that reads a source is forgotten, then remembered only if this run passes it
+      (run-draft (into named (set/difference (select/closure type named) known)) own
+                 (fetching-in named)))))
+
+(defn- make-open
+  "The `(open)` of `type`: a new empty draft, whose memory is `nothing`, the memory of a draft
+  that passes no check. Refuses where `unsealed?`."
+  [{:keys [unsealed? type]} nothing]
+  (fn []
+    (if unsealed?
+      (throw (no-drafts (:name type)))
+      (Draft. {} (atom nothing) nil 0))))
+
+(defn- displace-predecessor!
+  "Where `spec` names its type, makes `type` the definition of that name, as [[succeed!]] does,
+  and displaces the definition it succeeds, if any."
+  [spec type]
+  (when-let [n (:name spec)]
+    (when-let [displaced (succeed! n type)]
+      ((gate displaced) ::displace nil nil))))
 
 (defn define-type
   "Defines a type and returns it, a map describing it that holds no key. `spec`:
@@ -496,28 +758,11 @@
   [spec {:keys [strategy define run-all runner]}]
   (let [current (volatile! true)
         unsealed? (true? (:unsealed spec))
-        h (proof/define-type strategy (:name spec)
-            (cond-> {:keys (mapv :key (:fields spec))
-                     :interfaces (vec (:interfaces spec))
-                     :methods (let [refuse (fn [v] (throw (if unsealed?
-                                                            (displaced-unsealed (:name spec) v)
-                                                            (displaced-refusal (:name spec) v))))]
-                                (into {} (for [[[n ps :as sig] make] (:methods spec)]
-                                           [sig (if (and (= "toString" n) (empty? ps))
-                                                  (make (volatile! true) refuse)
-                                                  (make current refuse))])))
-                     :instead (:instead spec)}
-              unsealed? (assoc :unsealed true)))
+        h (proof/define-type strategy (:name spec) (make-definition spec unsealed? current))
         [vc dc] (proof/classes h)
-        type (let [t (compile-type spec strategy define run-all runner)]
-               ;; an unsealed type's memories never show every check passing through a value of
-               ;; its class: its `Hot` names Void, of which nothing is an instance
-               (assoc t ::class vc ::draft-class dc ::gate (volatile! nil) ::unsealed unsealed?
-                      ::hot (hot-of (if unsealed? Void vc) dc strategy (:ids t) (:readers t) (::readers-v t))))
-        ids (:ids type)
-        ^Hot hot (::hot type)
-        masks? (some? (.-bits hot))
-        all-mask (.-all hot)
+        type (make-type spec strategy define run-all runner vc dc unsealed?)
+        parts (parts-of type strategy runner vc unsealed? current)
+        {:keys [hot masks? removed]} parts
         nothing (Memo. type nil #{} #{} nil (when masks? 0))
         memo (fn [data ids]
                (if (empty? ids)
@@ -534,20 +779,7 @@
                          ids (set-of hot mask)]
                      (proof/mark! h m (PassKey. data ids mask))
                      (Memo. type data ids #{} m mask))))
-        bits (.-bits hot)
-        ;; the mask of the ids in `xs`, a collection, and of the keys of `m`, a map
-        bits-of (fn ^long [xs] (reduce (fn [^long a id] (bit-or a (long (bits id)))) 0 xs))
-        key-bits-of (fn ^long [m] (reduce-kv (fn [^long a id _] (bit-or a (long (bits id)))) 0 m))
-        engine (:engine type)
-        run* (::run type)
-        declared (:keys type)
-        declared? (member-of declared)
-        required-v (::required-v type)
-        required (:required type)
-        lacks? (make-lacks? required-v)
-        readers (:readers type)
-        readers-v (::readers-v type)
-        removed (proof/removed strategy)
+        lacks? (make-lacks? parts)
         clean (volatile! nil)
         clean? (make-clean? clean)
         refuse! (make-refuse! type clean?)
@@ -557,66 +789,34 @@
                   (proof/seal h data)
                   (do (refuse! data result may-lack?)
                       (proof/seal h data))))
-        ;; each declared key whose readers read no source, to a run of those readers alone
-        run-of (into {} (for [k declared
-                              :let [rs (get readers k #{})]
-                              :when (not-any? #(:fetches? ((:by-id type) %)) rs)]
-                          [k (runner engine rs)]))
-        own! (make-own! vc type current)
+        run-of (make-run-of parts)
+        own! (make-own! parts)
         own-memo (make-own-memo type)
         own-draft (make-own-draft type own-memo)
-        own-value (make-own-value vc type current strategy)
-        own-subject (make-own-subject unsealed? type own-value own-memo)
-        ;; a draft's entries, what it passes, its memory, and whether it passes every check:
-        ;; through the mask where the type has one
+        own-value (make-own-value parts)
+        own-subject (make-own-subject parts own-value own-memo)
         ;; each mask of passing checks asked for, to a run of the checks it leaves: the runner
         ;; over those checks where none reads a source, else every check but the known
         runs (java.util.concurrent.ConcurrentHashMap.)
-        fetching-m (when masks? (mask-of hot (filter #(:fetches? ((:by-id type) %)) ids)))
-        run-known (make-run-known runs fetching-m runner engine hot all-mask run*)
-        own-for-seal (make-own-for-seal masks? type ids hot all-mask own-memo own-draft run-known run*)
+        run-known (make-run-known parts runs)
+        own-for-seal (make-own-for-seal parts own-memo own-draft run-known)
         remember! (make-remember! type memo)
-        remember-m! (make-remember-m! type memo-m bits-of key-bits-of)
-        ;; each set of checks picked, to the closure of its checks of this type, as a set and
-        ;; as a mask or nil. Past 1000, a set not kept is closed anew.
+        remember-m! (make-remember-m! parts memo-m)
         closures (java.util.concurrent.ConcurrentHashMap.)
-        closure-of (fn [picked]
-                     (or (.get closures picked)
-                         (let [closed (select/closure type (set/intersection ids (set picked)))
-                               c [closed (mask-of hot closed)]]
-                           (when (< (.size closures) 1000) (.putIfAbsent closures picked c))
-                           c)))
-        ;; the checks of `picked` that read a source
-        fetching-in (fn [picked] (filter #(:fetches? ((:by-id type) %)) picked))
-        check-group (make-check-group masks? unsealed? type ids hot engine all-mask closure-of fetching-in
-                                      own-memo own-subject remember! remember-m!)
-        run-draft (make-run-draft type ids remember!)
-        ;; each key whose readers read no source, to its guard: an assoc of the key runs those
-        ;; readers on the old value with the key set, and throws what the change would throw
-        guards (let [make (or (:guard spec) (guard-maker With))
-                     refuse (fn [old result]
-                              (throw (if result
-                                       (check-failed type (report type result))
-                                       (displaced-refusal (:name type) old))))]
-                 (into {} (for [[k r] run-of] [k (make current r k clean? refuse)])))
-        ;; each declared key, to its guard, or to `none` where its readers read a source
-        key-guards (let [m (java.util.IdentityHashMap.)]
-                     (doseq [k declared] (.put m k (get guards k none)))
-                     m)
-        readers-m (.-readers-m hot)
-        ;; for a type without masks: each declared key, to a bit of a long, where it declares at
-        ;; most 64; and each set of keys a change of several keys changes, where no check of
-        ;; theirs reads a source, as those bits or else as the set of the checks that read them,
-        ;; to a runner of those checks. Past 1000, a set not kept is built anew.
-        key-bits (when (and (not masks?) (<= (count declared) 64))
-                   (let [m (java.util.IdentityHashMap.)]
-                     (doseq [[i k] (map-indexed vector (sort-by str declared))] (.put m k (bit-shift-left 1 i)))
-                     m))
+        closure-of (make-closure-of parts closures)
+        fetching-in (make-fetching-in type)
+        check-group (make-check-group parts closure-of fetching-in own-memo own-subject remember! remember-m!)
+        run-draft (make-run-draft parts remember!)
+        guards (make-guards spec parts run-of clean?)
+        key-guards (make-key-guards parts guards)
+        key-bits (make-key-bits parts)
+        ;; for a type without masks: each set of keys a change of several keys changes, where no
+        ;; check of theirs reads a source, as their `key-bits` or else as the set of the checks
+        ;; that read them, to a runner of those checks. Past 1000, a set not kept is built anew.
         change-runs (java.util.concurrent.ConcurrentHashMap.)
-        run-checks (make-run-checks change-runs runner engine readers-v)
-        whole-change (make-whole-change masks? ids hot all-mask readers-m readers-v removed refuse! run*)
-        change-many (make-change-many masks? type hot all-mask readers-m readers-v required removed key-guards
-                                      key-bits refuse! whole-change run-known run-checks)
+        run-checks (make-run-checks parts change-runs)
+        whole-change (make-whole-change parts refuse!)
+        change-many (make-change-many parts key-guards key-bits refuse! whole-change run-known run-checks)
         ;; the change guard, `(cg old changes)`: a change that sets one key goes to that key's guard
         change-guard ((or (:change spec) (change-guard-maker)) own! key-guards removed none change-many whole-change)
         ;; `(write old entries)`, which only `installed` calls: the change guard of what
@@ -630,7 +830,19 @@
                         (proof/seal h (with-meta-of entries old))))))
         ;; the seal of `v`, a value of this unsealed type, against the checks `picked`: runs them,
         ;; what they wait on and the floor, less what `v` passes, and returns `v` or throws
-        seal-value (make-seal-value type ids own-subject remember! refuse!)
+        seal-value (make-seal-value parts own-subject remember! refuse!)
+        ;; a value of this unsealed type, of the entries `data`
+        build (fn [data] (proof/build h data (atom nothing)))
+        construct (make-construct parts build seal!)
+        ;; `data`, which every check passes, sealed
+        seal-data (fn [data] (proof/seal h data))
+        seal (make-seal parts clean? lacks? remember! own-for-seal seal-value seal-data)
+        draft-of (make-draft-of parts)
+        rewrite (make-rewrite own-draft)
+        clean-draft (make-clean-draft parts own-draft)
+        check (make-check parts own-subject run-draft)
+        recheck (make-recheck parts own-subject run-draft fetching-in)
+        open (make-open parts nothing)
         ;; the installed write. Its three-argument arity, which the class's channel reaches, serves
         ;; both kinds of type; an unsealed type's strategy calls no other arity.
         write-all (fn
@@ -639,85 +851,32 @@
                     ([old entries _ _] (write old entries))
                     ([op x y]
                      (case op
-                       ::make (let [data (proof/plain-map x)]
-                                (when-not (.deref ^clojure.lang.Volatile current)
-                                  (throw (displaced-constructor (:name type) y)))
-                                (when-not (all-declared? declared? data) (refuse-undeclared! type (keys data)))
-                                (if unsealed?
-                                  (proof/build h data (atom nothing))
-                                  (seal! data (run* data #{}) true)))
-                       ::open (if unsealed?
-                                (throw (no-drafts (:name type)))
-                                (Draft. {} (atom nothing) nil 0))
-                       ::draft-of (cond unsealed? (throw (no-drafts (:name type)))
-                                        (instance? vc x) (Draft. (proof/plain-map x) (atom (Memo. type x ids #{} x all-mask)) (meta x) 0)
-                                        :else (throw (ex-info (str "not a value of " (:name type)) {:error :recognitum/not-a-value})))
-                       ::rewrite (let [[data] (own-draft x)
-                                       y (proof/plain-map y)
-                                       changed (changed-keys data y)]
-                                   (if (empty? changed)
-                                     x
-                                     (rewritten x y #(into % changed) (odd-after x y changed))))
-                       ::clean (let [_ (when unsealed? (throw (no-drafts (:name type))))
-                                     [data] (own-draft x)
-                                     kept (select-keys data (:keys type))]
-                                 (if (= (count kept) (count data))
-                                   x
-                                   (rewritten x kept #(into % (remove (:keys type)) (keys data)) 0)))
-                       ::seal (if unsealed?
-                                (seal-value x y)
-                                (let [[data known m0 all-pass? run-left] (own-for-seal x)]
-                                  (when-not (.deref ^clojure.lang.Volatile current)
-                                    (throw (displaced-draft (:name type))))
-                                  (when-not (all-declared? declared? data) (refuse-undeclared! type (keys data)))
-                           ;; a draft that passes every check runs none
-                                  (let [result (when-not all-pass? (run-left data))
-                                        rep (when-not (or all-pass? (clean? result)) (report type result))]
-                                    (if (or rep (lacks? data))
-                                      (do (remember! (.-cell ^Draft x) data m0 known (minus ids known) result)
-                                          (throw (check-failed type rep (missing type data))))
-                               ;; every check passes: the value sealed is the draft's proof. Where
-                               ;; another run has written since, there is nothing failed to forget.
-                                      (let [v (proof/seal h (with-meta-of data x))]
-                                        (when-not all-pass?
-                                          (compare-and-set! (.-cell ^Draft x) m0 (Memo. type v ids #{} v all-mask)))
-                                        v)))))
-                       ::check (let [[_ known :as own] (own-subject x)
-                                     named (set/intersection ids (set y))]
-                                 (run-draft (minus (select/closure type named) known) own ()))
+                       ::make (construct x y)
+                       ::open (open)
+                       ::draft-of (draft-of x)
+                       ::rewrite (rewrite x y)
+                       ::clean (clean-draft x)
+                       ::seal (seal x y)
+                       ::check (check x y)
                        ::check-all (check-group x y)
                        ::type type
                        ::current? @current
                 ;; whether `x` is a value sealed under this definition, which is current
                        ::sealed? (and (.deref ^clojure.lang.Volatile current) (proof/proven? h x))
                        ::displace (do (vreset! current false) nil)
-                       ::recheck (let [[_ known :as own] (own-subject x)
-                                       named (set/intersection ids (set y))]
-                            ;; a named check that reads a source is forgotten, then remembered only if this run passes it
-                                   (run-draft (into named (set/difference (select/closure type named) known)) own
-                                              (fetching-in named))))))]
+                       ::recheck (recheck x y))))]
     (if unsealed?
       ;; each change of a value carries its memory: the new value remembers what the old one
       ;; remembered, and the keys the change writes
       (proof/install-carry!
        h
        write-all
-       (fn [old changes]
-         (let [cell (own-value old)]
-           (refuse-undeclared! type (keys changes))
-           (let [mo @cell]
-             (atom (if (and (instance? Memo mo) (some? (.-proof ^Memo mo)))
-                     (let [^Memo mo mo]
-                       (Memo. (.-type mo) (.-base mo) (.-passes mo) (into (.-written mo) (keys changes))
-                              (.-proof mo) (.-mask mo)))
-                     mo))))))
+       (make-carry type own-value))
       (proof/install-write!
        h
        write-all
        (fn [k] (get guards k))
        change-guard))
     (vreset! (::gate type) (proof/installed strategy vc))
-    (when-let [n (:name spec)]
-      (when-let [displaced (succeed! n type)]
-        ((gate displaced) ::displace nil nil)))
+    (displace-predecessor! spec type)
     type))
