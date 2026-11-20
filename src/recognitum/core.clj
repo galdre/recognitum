@@ -86,141 +86,54 @@
         (cuts-sum-to-take [] (= take (reduce + (vals cuts))))
         (only-crew-get-cuts [cuts-sum-to-take] (every? crew (keys cuts))))
 
-  The fields:
+  The form is `(rec/defproven T [fields*] checks-sections* method-sections*)`:
 
-  Each field's key is a keyword in this namespace named after it. A field marked
-  `^:optional` may be absent; every other field must be present. A field that holds nil is
-  present. `map->T` takes a map from field keys to values, and `->T` takes every field, in
-  order. A type has at most 250 fields; a definition with more is refused.
+  - A field's key is the keyword in this namespace named after it, as `::take`. A field marked
+    `^:optional` may be absent; every other field must be present, and a field that holds nil
+    is present. `map->T` takes a map from field keys to values; `->T` takes every field, in
+    order.
+  - A checks section is `rec/checks`, at most once, then the type's own clauses; or a bundle
+    var, then one `(input [] body)` clause per input of the bundle. An input clause's body is
+    an expression of the fields, and the definition is refused where that body reads a
+    source. `^{:when-extant field}` on the bundle var skips that bundle's checks, as passing,
+    while `field` is absent; the definition is refused unless `field` is an optional field.
+  - A method section is a protocol or an interface, then its methods, each
+    `(method [this args*] body*)`, as in `defrecord`. The method sections follow the checks
+    sections. In a method body the fields are locals, nil where absent.
 
-  The sections:
+  An own clause is `(name [waits] flags? \"doc\"? body...)`. It defines the check whose id is
+  `::name`:
 
-  Sections follow the fields: first the checks sections, in any order, then the method
-  sections. A checks section is `rec/checks`, at most once, or the binding of a bundle.
+  - In the body the fields are locals. The check passes when the body returns exactly `true`;
+    anything else the body returns, truthy or not, is the check's failure data. A read of an
+    absent field fails the check with the failure data `{:absent key}`, where `key` is the
+    field's key; [[extant?]] and [[when-extant]] ask whether a field is present without
+    reading it.
+  - A check named after a field is that field's shape check. The shape check of an optional
+    field passes where the field is absent.
+  - A check runs only once every check it waits on has passed. Every check waits on the shape
+    check of each field its body reads, so `waits` need name only the other checks: an own
+    check by its bare name; a bundle's check, or every check of a bundle, by the qualified
+    var, `bundle-ns/check` or `bundle-ns/bundle`, even where the bundle is defined in this
+    namespace.
+  - `flags` holds the concerns the check carries, and `:override` where the clause replaces a
+    check. A concern is written as the symbol of the var [[defconcern]] defined, or as the
+    concern's id. A clause named `bundle-ns/check` whose flags hold `:override` replaces that
+    check of a bound bundle. The flags go right after the waits, before the docstring, and
+    several go in one set: `(c [waits] #{concern ::other} \"doc\" body)`. A flag written
+    later in the clause, before the body's last form, is refused.
 
-  A clause of `rec/checks`:
-
-  `rec/checks` starts the type's own clauses, each `(name [waits] flags? \"doc\"? body...)`.
-  A clause defines the check whose id is `::name`. The check passes when its body returns
-  exactly `true`; anything else the body returns is the check's failure data. A check named
-  after a field is that field's shape check, and the shape check of an optional field passes
-  where the field is absent.
-
-  Waits:
-
-  A check runs only once every check it waits on has passed; where one of them fails, the
-  check does not run, and a report names it as blocked. A check waits on the shape check of
-  each field its body reads or asks with [[extant?]], directly or through an input. A wait
-  names any other check it waits on: an own check by its bare name, a bundle's check by its
-  qualified var, or every check of a bundle by the bundle's qualified var, even where the
-  bundle is defined in this namespace. Waits that form a cycle are refused.
-
-  Flags:
-
-  A keyword, a symbol or a set of them right after the waits, with more forms after it, is
-  the clause's flags: the concerns the check carries, and `:override`. A concern is written
-  as the symbol of the var [[defconcern]] defined or as the concern's id, and several flags
-  go in one set: `(c [waits] concern body)`, `(c [waits] #{concern ::other} \"doc\" body)`.
-  `(bundle-ns/check [waits] :override body)` replaces that check of a bound bundle with a
-  body over the type's fields, keeping its id, its concerns and its binding's `:when-extant`.
-
-  Refused in a clause:
-
-  - a symbol in the flags' place that names no concern;
-  - a keyword there that is neither `:override` nor a concern's id;
-  - a set there that holds anything but keywords and symbols, such as `#{42}`;
-  - a keyword, a concern's symbol or a set holding either, written later in the clause and
-    before the body's last form, where no flag is read;
-  - a check whose whole body is a concern, since that check has flags and no body;
-  - metadata on a clause, its name or its waits. Metadata on a section's head is refused
-    too, except `^{:when-extant field}` on a bundle var.
-
-  A body:
-
-  In a body the fields are locals. A read of an absent field throws, which fails the check
-  with the failure data `{:absent key}`, where `key` is the field's key; [[extant?]] and
-  [[when-extant]] ask first. A failed read from a source throws too, and fails the check with
-  `{:fetch-failed source :cause e}`, as [[fetch]] describes. A body may catch either.
-  Anything else a body throws propagates out of the call that ran the check. A method of a
-  `deftype` that a body defines may not name a field.
-
-  The binding of a bundle:
-
-  A bundle var starts a binding of that bundle: one `(input [] body)` clause per input of the
-  bundle, each body an expression of the fields that reads no source. An input clause runs
-  when a check that reads its input runs, once for each such check. Where the clause reads
-  an absent field, the input is absent, and a read of the input fails the bundle's check with
-  `{:absent :input}`, where `:input` is the input's name as a keyword. `^{:when-extant field}`
-  on the bundle var skips the binding's checks, as passing, while that optional field is
-  absent; a write that adds the field runs them.
-
-  The method sections:
-
-  After the checks sections come the type's own protocols and interfaces, mixed, written as
-  in `defrecord`: a protocol or an interface, then its methods, each `(method [this args*]
-  body*)`. Of `Object`, only `toString`. In a method body the fields are locals, nil where
-  absent, `this` is the value, and `T` is the value's class, `(class this)`, which takes no
-  type hint. A method body may not call `map->T` or `->T`. Sealed values are instances of
-  each interface and each protocol's interface, so a direct call of a method dispatches on
-  the class; drafts are not. Type hints on the parameters choose among an interface's methods
-  of one arity. A call of a method that a section's protocol or interface declares and the
-  section does not give throws `UnsupportedOperationException`. Where a value already has
-  that method as a map, the call gives the map's answer instead, or throws
-  `AbstractMethodError` where the two methods' return types differ.
-
-  Refused in a method section:
-
-  - a checks section after a method section;
-  - a head that is a class and not an interface, and a protocol or an interface that heads
-    two sections;
-  - a method no interface of the section declares, a method more than one matches, and a
-    method written twice with the same number of parameters;
-  - `equals` and `hashCode`;
-  - a method that a value already has as a map, such as `count` with no argument;
-  - the interfaces `java.util.function.Predicate` and `java.util.function.BiConsumer`;
-  - interfaces that clash with each other or with a map's: two that give default bodies of
-    one method that the section does not give, two whose methods differ only in return type,
-    and one whose `print-method` entry Clojure prefers to a map's.
-
-  A definition that fails:
-
-  The definition is one form: it defines at the top level and inside another form alike.
-  Where a check or a method does not compile, or a section is refused, the definition fails
-  and leaves nothing: no class, no constructor, no var, and an earlier definition of `T`
-  stays current. A definition whose name already names a var or another class in this
-  namespace is refused in the same way. A refusal is an ex-info whose `:error` is
-  `:recognitum/refused`; where the form is refused as it expands, that ex-info is the cause
-  of the compiler's exception. Where it is the compiler that rejects a body, as for a method
-  that calls an unknown function, the compiler's exception has no such cause.
-
-  Values and writes:
-
-  A value reads, compares and hashes as a map of its entries, and is not a record: `record?`
-  is false of it. It prints as the tagged literal `#ns/T {...}`, which calls `map->T` once
-  `ns/T` maps to it in `data_readers.cljc`.
   A write to a value (`assoc`, `dissoc`, `conj`, `merge`, `into`) runs the checks that read a
-  key the write changes, and returns a new value or throws. One `into`, one `conj` of a map
-  and a `merge` of one map each write their keys together, as one write checked on its
-  result; `assoc` of several keys writes them one at a time. A constructor or a write that
-  fails throws ex-info with the data [[seal]] describes: `:error` is
-  `:recognitum/undeclared-keys`, before any check runs, for a key the type does not declare,
-  or `:recognitum/check-failed` where a check fails or a required field is absent. `empty` of
-  a value throws, and so does the class's own constructor, `(T. ...)`.
+  key the write changes, and returns a new value or throws. A constructor or a write that fails
+  throws ex-info: `:error` is `:recognitum/undeclared-keys` for a key the type does not
+  declare, or `:recognitum/check-failed` where a check fails or a required field is absent. A
+  definition that is refused throws ex-info whose `:error` is `:recognitum/refused`, and
+  defines nothing. Evaluating the form again redefines `T`, and the values of the earlier
+  definition are no longer sealed.
 
-  Redefinition:
-
-  Evaluating the form again redefines `T` and displaces the earlier definition; it does so
-  also where the name was unmapped, or its namespace removed and loaded again, in between.
-  Values of the displaced definition stay values of its class, and they are not sealed:
-  [[sealed?]] answers false, and a write that changes one, or a method of its protocols or
-  interfaces other than `toString` called with one, throws, with `:error`
-  `:recognitum/displaced`. [[check]], [[recheck]], [[check-all]], [[recheck-all]] and [[seal]]
-  given one throw the same, and [[seal-all]] lists it among its failures with that `:error`.
-  A write that changes nothing may return the value unchanged. A
-  method of a protocol extended to the class from outside, as with `extend-protocol`, still
-  answers for such a value. A constructor held from before the redefinition throws, with
-  `:error` `:recognitum/displaced-constructor`. `(rec/seal (rec/draft v))` proves a value of
-  a displaced definition under the current definition."
+  `docs/reference/defproven.md` states the rest: every refusal, the rules of a check body, of a
+  bundle's binding and of the method sections, and what a failed definition leaves.
+  `docs/reference/redefinition.md` states the rules of redefinition."
   {:arglists '([T [fields*] sections* method-sections*])
    :style/indent [2 nil nil [:defn]]}
   [tname fields & sections]
@@ -228,22 +141,22 @@
     (assoc expansion :wiring `@(var wiring))))
 
 (defmacro defproven-in
-  "Defines the type `T` as [[defproven]] does, from the same form, except that nothing runs
-  its checks but a call that asks to: `map->T`, `->T` and the tagged literal check nothing, and
-  a write (`assoc`, `dissoc`, `merge`, `conj`, `into`) checks nothing. A value may therefore
-  lack a required field. A constructor or a write given a key the type does not declare still
-  throws ex-info whose `:error` is `:recognitum/undeclared-keys`, as for a [[defproven]] type.
+  "Defines the type `T` from the form [[defproven]] takes. Nothing runs the type's checks but a
+  call that asks to run them: `map->T`, `->T` and the tagged literal check nothing, and a write
+  (`assoc`, `dissoc`, `merge`, `conj`, `into`) checks nothing. A value may therefore lack a
+  required field. A constructor or a write given a key the type does not declare still throws
+  ex-info whose `:error` is `:recognitum/undeclared-keys`.
 
       (rec/defproven-in Ballot [choice ^:optional round]
         rec/checks
         (choice [] (string? choice))
         (round-positive [] (rec/when-extant round (pos? round))))
 
-  A value carries, in place, the checks that passed on its entries, and every holder sees what
-  a run writes there: [[check]], [[recheck]], [[check-all]], [[recheck-all]], [[seal]] and
-  [[seal-all]] run checks on it and remember what passed and forget what failed. A write
-  returns a new value remembering what the old one passed, less the checks that read a key it
-  changes; a write of the very object a key holds changes nothing.
+  A value carries, in place, the checks that passed on its entries. [[check]], [[recheck]],
+  [[check-all]], [[recheck-all]], [[seal]] and [[seal-all]] run checks on a value, and the
+  value remembers what passed and forgets what failed; every holder of the value sees what the
+  value remembers. A write returns a new value remembering what the old one passed, less the
+  checks that read a key the write changes.
 
   A value is never sealed: [[sealed?]] answers false, and code that needs proof asks
   [[proves?]]. Every value implements the type's protocols and interfaces, whatever it has
@@ -252,12 +165,9 @@
   `:recognitum/no-drafts`. [[seal-all]] enters a value as it enters a draft, and
   [[drafting-all]] leaves it as it is.
 
-  Evaluating the form again redefines `T` and displaces the earlier definition. A value of the
-  displaced definition reads as before and proves nothing; a write that changes it, a method
-  other than `toString` called with it, and [[check]], [[recheck]], [[check-all]],
-  [[recheck-all]] and [[seal]] given it throw ex-info whose `:error` is
-  `:recognitum/displaced` and whose message names the current `map->T`. [[seal-all]] lists it
-  among its failures with that `:error`."
+  Evaluating the form again redefines `T`, and a value of the earlier definition reads as
+  before and proves nothing. `docs/reference/redefinition.md` states what such a value
+  refuses, and `docs/reference/defproven.md` states the form in full."
   {:arglists '([T [fields*] sections* method-sections*])
    :style/indent [2 nil nil [:defn]]}
   [tname fields & sections]

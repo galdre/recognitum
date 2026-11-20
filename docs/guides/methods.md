@@ -173,8 +173,8 @@ The message names the line of the clause that is refused, as the Clojure reader 
 Here the form was evaluated alone, so line 6 is the sixth line of the form. Where a file is
 loaded, it is the line of the file.
 
-The docstring of `rec/defproven` lists what a method section refuses, under the words "Refused
-in a method section". The list above gives a remedy for some of those refusals, and leaves out
+[reference/defproven.md](../reference/defproven.md#method-sections) lists everything that a
+method section refuses. The list above gives a remedy for some of those refusals, and leaves out
 the refusals of a section that is written wrongly, such as a method that is written twice.
 
 ## Extending a protocol from outside the definition

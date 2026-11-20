@@ -82,7 +82,7 @@ The alias does not reach the class: `plane/Plane` names a var, and no such var e
 hint and `extend-protocol` name the class by its full name or by the name the import gives it.
 
 A wait in a check clause names a bundle's check, or a whole bundle, by its qualified var:
-`plane/inspected`, `plane/airworthy`. The docstring of `rec/defproven` states the rule.
+`plane/inspected`, `plane/airworthy`. [defproven.md](defproven.md#waits) states the rule.
 
 ## Names inside a body
 

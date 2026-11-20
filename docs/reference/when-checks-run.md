@@ -142,7 +142,7 @@ Here `qty` fails, so the two checks that wait on it, directly or through `stocke
 
 A body that throws anything but the two failures the library catches (a read of an absent
 field, and a failed read from a source) ends the run: the exception propagates out of the call,
-as the docstring of `rec/defproven` states.
+as [defproven.md](defproven.md#a-check-body) states.
 
 ## Sources
 

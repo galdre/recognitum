@@ -2,10 +2,13 @@
 
 The rules of one function are in its docstring: `(clojure.repl/doc recognitum.core/seal)`. The
 docstring of the namespace `recognitum.core` lists every public function and macro. The pages
-here hold the rules that span several functions. Each page stands alone.
+here hold the rules that span several functions. One page differs: the docstrings of
+`rec/defproven` and `rec/defproven-in` state the form and what is thrown, and
+[defproven.md](defproven.md) states the rest of the form's rules. Each page stands alone.
 
 | Page | Answers |
 |---|---|
+| [The definition form](defproven.md) | What do `rec/defproven` and `rec/defproven-in` take: fields, checks sections, a clause, waits, flags, a bundle's binding, method sections? What does a definition refuse, and what does a refused definition leave? |
 | [When a check runs](when-checks-run.md) | Which checks does each call run, `rec/check-all`, `rec/recheck-all` and `rec/seal-all` among them? What happens when a check that another waits on fails? How do I run the benchmark? |
 | [Absent fields and nil](absence-and-nil.md) | What is the difference between an absent field and a field that holds `nil`? What does each function do where a required field is absent? Where may `rec/extant?` and `rec/when-extant` be written? |
 | [How a write is checked](writes.md) | Which checks does `assoc` run? Is a write of several keys one write? What happens to a key the type does not declare? |

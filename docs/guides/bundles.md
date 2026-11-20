@@ -125,7 +125,8 @@ own.
 - Any other exception that an input's clause throws propagates out of the call that ran the
   check, as an exception from a check body does.
 
-The docstring of `rec/defproven` states the rules of a binding.
+[reference/defproven.md](../reference/defproven.md#the-binding-of-a-bundle) states the rules of a
+binding, and what a binding refuses.
 
 ## Binding one bundle twice
 
