@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.4 (2026-11-20)
+
+### Changed
+
+- The docstrings and comments of the library's internal namespaces were revised for clarity
+  and checked against the code, with no change to the public API of `recognitum.core` or to
+  behavior.
+
 ## 0.3.3 (2026-11-20)
 
 ### Changed
