@@ -1,98 +1,128 @@
 (ns recognitum.proof.key-class
-  "The key-class proof strategy: each definition of a type emits a final APersistentMap
-  subclass T whose one public constructor needs T's key, and a draft class T$Draft whose
-  mark needs it too. The handle `define-type` returns holds the key; this namespace holds
-  none, so reloading it loses nothing and strands nothing.
+  "The key-class proof strategy, [[strategy]]. Each definition of a type emits a final
+  `APersistentMap` subclass T, whose one public constructor needs T's access key, and a draft
+  class `T$Draft`, whose mark needs that access key too. The handle that `define-type` returns
+  holds the access key. This namespace holds none, so reloading it loses nothing and strands
+  nothing.
 
-    T  extends APersistentMap implements IObj, IEditableCollection, IMapIterable,
-       recognitum.proof.Proven and each interface its definition lists; where the definition declares keys, also
-       IKeywordLookup. final. Holds one field f<i> per declared key K<i>, ABSENT where the
-       value lacks that key, a private map `ext` of its other entries, a private `_meta`
-       and a private count `cnt`, which every constructor sets. T(Object key, Object data) throws unless key is T.KEY, a
-       SecurityException whose message, one constant, names T and closes with the words the
-       definition handed down as `:instead`, or with the strategy's own; it splits data into the
-       fields and ext, and takes data's meta. Reads of a declared key read its field, others
-       forward to ext; a keyword's lookup of a declared key reads the field through a thunk
-       class T$K<i>, as on a defrecord. seq conses the present fields' entries, in the order
-       of the keys, onto ext's seq; iterator, keyIterator and valIterator are a T$I, which
-       walks the same entries reading the fields; equiv and equals against
-       another T compare field by field, then ext. Private static volatiles WRITES, GATE, CHG
-       and, per declared key, G<i> are set once, with the key, by install(key, writes, gate,
-       guards, changes): while
-       WRITES is set, assoc and without return WRITES.invoke(this, entries, k, v), v the
-       strategy's marker for a removed key on without, and assocEx and cons return
-       WRITES.invoke(this, entries), entries the whole new map, each one checked write that
-       seals or throws; asTransient returns WRITES.invoke(this), a transient whose
-       persistent! makes one checked write (into). Where G<i> is set, an assoc of K<i> to a
-       v not identical to f<i> calls G<i>.invoke(this, v) in place of WRITES, and where that
-       returns, returns a T made by a private constructor from this with f<i> set to v; the
-       guard is handed no way to make a value. Where CHG is set, every other assoc, and
-       without and cons, call CHG.invoke(this, ...) in place of WRITES: it answers the net
-       change as flat pairs after the change guard returned, or null where nothing changes,
-       and the change returns a T made by a private constructor from this and those pairs,
-       or this. asTransient then returns CHG.invoke(this), a transient whose persistent! is
-       one cons of what it was told. CHG holds no key. While WRITES is not set, every other change
-       returns a plain map. A public static gate() returns
-       GATE, which needs no key to call and has no four-argument arity. A no-op assoc,
-       without or cons returns this. empty throws, as on a defrecord. withMeta with the same
-       meta returns this. writeReplace serializes a plain map; readObject throws. A static
-       create(IPersistentMap) returns its argument, so #T{...} reads back as a plain map.
-       Each method the definition gives a function, `toString` included, and each
-       abstract method of a listed interface that T does not already have, is a
-       forwarding method: it calls the function in a private static FNS table, set once by
-       claim(fns, removed) when the type is defined, with the value itself and the call's arguments,
-       boxed; a slot with no function throws UnsupportedOperationException. The function
-       sees no key. A default method with no function keeps its body; two default bodies
-       of one method, from interfaces neither of which extends the other, and no function,
-       refuse the definition.
-    T$Draft implements BiConsumer (accept(key, check): mark) and Predicate (test(check):
-       passed?), and none of the listed interfaces: a definition may not list either, nor an
-       interface they extend. accept throws unless key is T.KEY. A
-       public static gate() returns T.gate(). `define` records on the class, through a
-       ClassValue, that it made it, so the keyless `marked?` answers test(check) of its own
-       drafts and false of any other object, whatever its class is named.
+  The class T:
 
-  An unsealed definition's T differs in these: it also implements recognitum.proof.Built
-  and holds a private final `mem`, which memory$() answers; its one public constructor is
-  T(Object key, Object data, Object mem); it has no guards and no constructor taking every
-  field; a change takes the new value's memory from the last element of what CHG answered,
-  after the pairs; assocEx is assoc where the key is absent. Its handle seals nothing and
-  proves nothing; install-carry! sets CHG, a WRITES that nothing calls, and a GATE with the
-  write's three-argument arity alone. `define` records on the class, through a ClassValue,
-  that it made it, so the keyless `memory` answers memory$() of its own values and nil of
-  anything else.
+  - T extends `APersistentMap`, is final, and implements `IObj`, `IEditableCollection`,
+    `IMapIterable`, `recognitum.proof.Proven` and each interface that its definition lists;
+    `IReduceInit` and `IKVReduce`, each unless T forwards a method of the same name and
+    parameters; and, where the definition declares keys, `IKeywordLookup`.
+  - T holds one field `f<i>` per declared key `K<i>`, `ABSENT` where the value lacks that
+    key; a private map `ext` of the value's other entries; a private `_meta`; and a private
+    count `cnt`. Every constructor sets them.
+  - The constructor `T(Object key, Object data)` throws unless `key` is `T.KEY`: a
+    `SecurityException` whose message, one constant, names T and closes with the words that
+    the definition gave as `:instead`, or with the strategy's own. The constructor splits
+    `data` into the fields and `ext`, and takes `data`'s metadata.
+  - T reads a declared key from its field, and any other key from `ext`. A keyword's lookup
+    of a declared key reads the field through a thunk class `T$K<i>`, as on a defrecord.
+  - `seq` conses the present fields' entries, in the order of the keys, onto `ext`'s seq.
+    `iterator`, `keyIterator` and `valIterator` return a `T$I`, which walks the same entries
+    and reads the fields. `equiv` and `equals` against another T compare field by field, then
+    `ext`.
+  - T has private static volatiles `WRITES`, `GATE`, `CHG` and, per declared key, `G<i>`,
+    which `install(key, writes, gate, guards, changes)` sets once, with the access key.
+  - A public static `gate()` returns `GATE`, which needs no access key to call and has no
+    four-argument arity.
+  - `writeReplace` serializes a plain map; `readObject` throws. A static
+    `create(IPersistentMap)` returns its argument, so `#T{...}` reads back as a plain map.
+  - Each method that the definition gives a function, `toString` included, and each abstract
+    method of a listed interface that T does not already have, is a forwarding method. It
+    calls its function with the value itself and the call's arguments, boxed. The functions
+    are in a private static table `FNS`, which `claim(fns, removed)` sets once when the type
+    is defined. Where the table holds no function, the method throws
+    `UnsupportedOperationException`. The function sees no access key. A default method with
+    no function keeps its body. Two default bodies of one method, from interfaces neither of
+    which extends the other, with no function, refuse the definition.
 
-  T$New is an AFn whose invoke(key, data) returns new T(key, data), for the handle's seal, or
-  of an unsealed T invoke(key, data, mem), for its build; it holds no key. T$I's constructor
-  is package-private: only T makes one.
+  The changes of a T:
 
-  An assoc of declared key K<i> is a private method assoc$i of its own, which the JIT inlines
-  into the call site's assoc; where its guard returns it calls a private constructor taking
-  every field, as a defrecord's assoc does. A definition declares at most 250 keys. Past 160,
-  a wide T reads a declared key's field through a private field$(i), the index from index$,
-  counts its present fields in a private present$(), and walks its fields in chunks, private
-  methods reduce$c, kvreduce$c and fill$c, so that no method passes HotSpot's 8000 bytes and
-  runs interpreted; a T of at most 160 keys has none of these.
+  - A change that alters nothing (`assoc`, `without` or `cons`) returns `this`. `empty`
+    throws, as on a defrecord. `withMeta` with the same metadata returns `this`.
+  - While `WRITES` is not set, every other change returns a plain map.
+  - While `WRITES` is set, `assoc` and `without` return `WRITES.invoke(this, entries, k, v)`,
+    `v` being the strategy's marker for a removed key on `without`, and `assocEx` and `cons`
+    return `WRITES.invoke(this, entries)`, `entries` being the whole new map. Each is one
+    checked write, which seals or throws. `asTransient` returns `WRITES.invoke(this)`, a
+    transient whose `persistent!` makes one checked write (`into`).
+  - Where `G<i>` is set, an `assoc` of `K<i>` to a `v` not identical to `f<i>` calls
+    `G<i>.invoke(this, v)` in place of `WRITES`. Where that call returns, the `assoc` returns
+    a T that a private constructor makes from `this` with `f<i>` set to `v`. The guard
+    receives no way to make a value.
+  - Where `CHG` is set, every other `assoc`, and `without` and `cons`, call
+    `CHG.invoke(this, ...)` in place of `WRITES`. CHG answers the net change as flat pairs,
+    after the change guard returned, or null where nothing changes. The change returns a T
+    that a private constructor makes from `this` and those pairs, or returns `this`.
+    `asTransient` then returns `CHG.invoke(this)`, a transient whose `persistent!` is one
+    `cons` of what the transient was told. CHG holds no access key.
+  - An `assoc` of declared key `K<i>` is a private method `assoc$i` of its own. Where the
+    guard returns, `assoc$i` calls a private constructor that takes every field, as a
+    defrecord's `assoc` does.
 
-  T.KEY is a package-private static made in <clinit>. claim(fns, removed) hands it out
-  once, to `define-type`. Besides recognitum.proof.Proven, defined by a namespace that is never
-  reloaded, and the interfaces a definition lists, only JDK and clojure.lang interfaces
-  appear in the classes.
+  A definition declares at most 250 keys. A T of more than 160 keys, a wide T, reads a declared
+  key's field through a private `field$(i)`, the index coming from `index$`, counts its present
+  fields in a private `present$()`, and walks its fields in chunks of at most 160 keys, each
+  in a private method `reduce$c`, `kvreduce$c` or `fill$c`. A T of at most 160 keys has none
+  of these.
 
-  A value prints as its map, so the text shows its data alone, and reads back as a plain
-  map; under *print-dup* it prints as T/create of its map, which reads back plain too. Where
-  a listed interface or a supertype of it has a `print-method` or `print-dup` entry, the
-  definition prefers the map's entry to it, and is refused, with nothing changed, where
-  that entry is already preferred to the map's.
+  `T$Draft` implements `BiConsumer` (`accept(key, check)`: mark) and `Predicate`
+  (`test(check)`: passed?), and none of the listed interfaces, so a definition may list
+  neither of those two, nor an interface that either extends. `accept` throws unless `key` is
+  `T.KEY`. A public static `gate()` returns `T.gate()`. [[define]] records on the class,
+  through a ClassValue, that it made the class, so the strategy's `marked?`, which needs no
+  access key, answers `test(check)` of its own drafts and false of any other object, whatever
+  its class is named.
+
+  An unsealed definition's T differs in these:
+
+  - it also implements `recognitum.proof.Built` and holds a private final `mem`, which
+    `memory$()` answers;
+  - its one public constructor is `T(Object key, Object data, Object mem)`;
+  - it has no guards and no constructor that takes every field;
+  - a change takes the new value's memory from the last element of what CHG answered, after
+    the pairs;
+  - `assocEx` is `assoc` where the key is absent, and throws where the key is present;
+  - its handle seals nothing and proves nothing. `install-carry!` sets CHG, a `WRITES` that
+    nothing calls, and a `GATE` that has only the write's three-argument arity;
+  - [[define]] records on the class, through a ClassValue, that it made the class, so the
+    strategy's `memory`, which needs no access key, answers `memory$()` of its own values and
+    nil of anything else.
+
+  The other classes and the access key:
+
+  - `T$New` is an `AFn` whose `invoke(key, data)` returns `new T(key, data)`, for the
+    handle's `seal`; of an unsealed T, `invoke(key, data, mem)`, for its `build`. It holds no
+    access key.
+  - `T$I`'s constructor is package-private: only T makes one.
+  - `T.KEY`, the access key, is a package-private static made in `<clinit>`.
+    `claim(fns, removed)` hands it out once, to `define-type`.
+  - Besides `recognitum.proof.Proven` and `recognitum.proof.Built`, from a namespace that is
+    never reloaded, and the interfaces that a definition lists, only JDK and `clojure.lang`
+    interfaces appear in the classes.
+
+  A value prints as its map, so the text shows its data alone and reads back as a plain map.
+  Under `*print-dup*` it prints as `T/create` of its map, which reads back as a plain map too.
+  Where a listed interface, or a supertype of one, has a `print-method` or `print-dup` entry,
+  the definition prefers the map's entry and `Proven`'s to that entry. Where that entry is
+  already preferred to the map's, the definition is refused, with nothing changed.
 
   `refusal` and `define-type` refuse through one analysis of the definition: `define-type`
-  throws, as `ex-info` data, exactly the refusal `refusal` answers. The kinds beyond the
-  protocol's: `:malformed` (the shape of the definition, its keys, its `:instead`, which is a
-  string or nil, or a signature), `:too-many-keys` (more than 250 declared keys),
-  `:too-many-words` (an `:instead` of more than 10000 characters), `:not-a-function`,
-  `:duplicate` (two signatures of one method), `:not-an-interface`, `:draft-interface`
-  (an interface a draft implements) and `:reloaded-interface` (a listed interface whose name
-  now loads another class)."
+  throws, as `ex-info` data, exactly the refusal that `refusal` answers. The kinds beyond the
+  protocol's:
+
+  - `:malformed`: the shape of the definition, its keys, its `:unsealed`, which is true, false
+    or nil, its `:instead`, which is a string or nil, or a signature;
+  - `:too-many-keys`: more than 250 declared keys;
+  - `:too-many-words`: an `:instead` of more than 10000 characters;
+  - `:not-a-function`;
+  - `:duplicate`: two signatures of one method;
+  - `:not-an-interface`;
+  - `:draft-interface`: an interface that a draft implements;
+  - `:reloaded-interface`: a listed interface whose name now loads another class."
   (:require [recognitum.proof :as proof]
             [recognitum.proof.key-class.analysis :refer [analysis outranked refusal]]
             [recognitum.proof.key-class.changes :refer [carry-fn changes-fn removed]]
@@ -105,13 +135,14 @@
 (defonce ^:private counter (java.util.concurrent.atomic.AtomicLong.))
 
 (defn fresh-name
-  "A new class name, for a new type. Redefinition reuses the name."
+  "A new class name, for a definition whose type has no name."
   []
   (str "recognitum.proof.key_class.T" (.incrementAndGet ^java.util.concurrent.atomic.AtomicLong counter)))
 
 (defn class-name
-  "The class name for `type-name`, a symbol: `my.ns/T` -> `my.ns.T`. Every definition of the
-  type names its value class so. Throws for a name that is not a symbol."
+  "The class name for `type-name`, a symbol, munged: `my-ns/T` -> `my_ns.T`. Every definition
+  of the type names its value class so. Throws IllegalArgumentException for a name that is not
+  a symbol."
   ^String [type-name]
   (when-not (symbol? type-name)
     (throw (IllegalArgumentException. (str "a type's name is a symbol: " (pr-str type-name)))))
@@ -138,32 +169,34 @@
   (class-flags))
 
 (defn- marked?
-  "Whether `draft` is of a draft class [[define]] made and records `check` as passed."
+  "Whether `draft` is of a draft class that [[define]] made, and has `check` marked as passed."
   [draft check]
   (boolean (and (some? draft)
                 (flagged? own-drafts (class draft))
                 (.test ^java.util.function.Predicate draft check))))
 
 (defn- memory
-  "The memory of `v`, a value of an unsealed definition's class [[define]] made; else nil."
+  "The memory of `v` where `v` is a value of an unsealed definition's class that [[define]]
+  made; else nil."
   [v]
   (when (and (instance? recognitum.proof.Built v) (flagged? own-unsealed (class v)))
     (.memory$ ^recognitum.proof.Built v)))
 
 (defn- mark-draft!
-  "Marks `check` on `draft`, a draft of the class `dc`, with `key`."
+  "Marks `check` as passed on `draft` with the access key `key`. Throws where `draft` is not
+  of the draft class `dc`."
   [^Class dc key draft check]
   (when-not (.isInstance dc draft) (throw (IllegalArgumentException. "not a draft of this type")))
   (.accept ^java.util.function.BiConsumer draft key check)
   nil)
 
 (defn- draft-passed?
-  "Whether `draft` is a draft of the class `dc` that records `check`."
+  "Whether `draft` is of the draft class `dc` and has `check` marked as passed."
   [^Class dc draft check]
   (and (.isInstance dc draft) (.test ^java.util.function.Predicate draft check)))
 
 (defn- install-method
-  "The static install of the value class `vc`."
+  "The static method `install` of the value class `vc`."
   ^Method [^Class vc]
   (.getMethod vc "install" (into-array Class [Object Object Object (class (object-array 0)) Object])))
 
@@ -210,11 +243,11 @@
         install    (install-method vc)
         gate       (.getMethod vc "gate" (make-array Class 0))
         ;; T's changes call the first function, always with the value itself as `old`.
-        ;; `installed` hands the second to callers without the key, so a write through it
-        ;; starts only from a value of this definition, and it has no four-argument arity: the
-        ;; key a caller names is trusted only where T names it. `guards` is nil, or one guard
-        ;; or nil per declared key; `changes` nil, or what T's changes call in place of the
-        ;; write, which holds no key: T makes the value.
+        ;; `installed` hands the second to callers without the access key, so a write through
+        ;; it starts only from a value of this definition, and it has no four-argument arity:
+        ;; the map key that a caller names is trusted only where T names it. `guards` is nil,
+        ;; or one guard or nil per declared key; `changes` is nil, or what T's changes call in
+        ;; place of the write, which holds no access key: T makes the value.
         install!   (fn [write guards changes]
                      (let [own! (fn [old]
                                   (when-not (.isInstance vc old)
@@ -262,7 +295,8 @@
       (capabilities [_] [key]))))
 
 (defn- prefer-print-as-map!
-  "Sets `prefs`, which [[analysis]] checked. One set meanwhile in the other direction refuses."
+  "Sets the print preferences `prefs`, which [[analysis]] checked. Where code has since set a
+  preference in the other direction, throws the refusal that [[outranked]] makes."
   [prefs]
   (doseq [[nm ^MultiFn mf winner k] prefs]
     (try (.preferMethod mf winner k)
@@ -270,9 +304,10 @@
            (let [r (outranked nm k)] (throw (ex-info (:message r) r)))))))
 
 (defn- define
-  "Refuses, defining nothing, where [[analysis]] does, throwing the refusal as `ex-info` data
-  with its message. The refusal is checked before T is defined, so it leaves no class under
-  the type's name."
+  "Defines the type `type-name`, or a type with no name where it is nil, from `definition`, and
+  returns its handle. Where [[analysis]] refuses the definition, throws the refusal as
+  `ex-info` data with its message, and defines nothing: no class is left under the type's
+  name."
   [type-name definition]
   (let [{ks :keys :keys [refusal interfaces plan prefs unsealed instead]} (analysis definition)
         _      (when refusal (throw (ex-info (:message refusal) refusal)))
@@ -298,9 +333,10 @@
       (handle vc dc make key ks))))
 
 (def strategy
-  "Each `define-type` emits T and T$Draft into a new loader and claims T's key. The same
-  name again is redefinition: a new class pair with a new key. A refused definition throws
-  and leaves the type as it was: no handle exists for it, and no key is claimed."
+  "The key-class proof strategy. Each `define-type` emits T and `T$Draft` into a new loader
+  and claims T's access key. The same name again is a redefinition: a new class pair with a
+  new access key. A refused definition throws and leaves the type as it was: no handle exists
+  for it, and no access key is claimed."
   (reify proof/Strategy
     (installed [_ value-class]
       (.invoke (.getMethod ^Class value-class "gate" (make-array Class 0)) nil (object-array 0)))

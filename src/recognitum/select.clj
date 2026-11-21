@@ -1,23 +1,27 @@
 (ns recognitum.select
-  "Selections: values naming some of a type's checks, and [[select]], which finds the checks
-  a selection names in one type.
+  "Selections, and [[select]], which finds the checks that a selection selects in one type.
 
-  A selection is a check id or a concern id (a keyword), a concern, a bundle, a bundle's check, or one
-  of [[every]], [[shape]], [[pure]], [[fetching]], [[reading]], [[except]] and [[union]].
-  A keyword names a concern or a bundle's check through its var: the var `defconcern` or
+  A selection is one of:
+
+  - a keyword: a check id or a concern id;
+  - a concern, a bundle, or a bundle's check;
+  - [[every]], [[shape]] or [[pure]], or what [[fetching]], [[reading]], [[except]] or
+    [[union]] returns.
+
+  A keyword names a concern or a bundle's check through a var: the var that `defconcern` or
   `defchecks` made, interned under the keyword's name in the keyword's namespace. Any other
   keyword is a type's own check id, and [[select]] refuses one that the type lacks.
 
-  A type, here, is the map the record layer describes a definition by; this namespace reads
-  its `:checks`, each `{:id :concerns :waits :reads :sources :fetches? :shape-of}`, and its
-  `:by-id`."
+  A type, here, is the map by which the record layer describes a definition. This namespace
+  reads its `:name`, its `:optional`, its `:by-id`, and its `:checks`, each
+  `{:id :concerns :waits :reads :sources :fetches? :shape-of}`."
   (:require
    [clojure.set :as set]))
 
 (defrecord Concern [id doc])
 
 (defn concern
-  "The concern named `id`, a qualified keyword."
+  "The concern whose id is `id`, a qualified keyword, with the docstring `doc`."
   [id doc]
   (->Concern id doc))
 
@@ -34,27 +38,27 @@
                      (= k (:id x)))
             x))))))
 
-(def every "Every check." {::op :every})
-(def shape "Every shape check: each check named after its field." {::op :shape})
-(def pure "Every check that reads no source." {::op :pure})
+(def every "Selects every check." {::op :every})
+(def shape "Selects every shape check: each check named after its field." {::op :shape})
+(def pure "Selects every check that reads no source." {::op :pure})
 
 (defn fetching
-  "The checks that read `source`."
+  "Selects the checks that read `source`."
   [source]
   {::op :fetching :source source})
 
 (defn reading
-  "The checks that read the field `k`, a key, directly or through a bundle's input."
+  "Selects the checks that read the field whose key is `k`, directly or through a bundle's input."
   [k]
   {::op :reading :key k})
 
 (defn except
-  "The checks `s` names, less those any of `xs` names."
+  "Selects the checks that `s` selects, less those that any of `xs` selects."
   [s & xs]
   {::op :except :s s :xs (vec xs)})
 
 (defn union
-  "The checks any of `xs` names."
+  "Selects the checks that any of `xs` selects."
   [& xs]
   {::op :union :xs (vec xs)})
 
@@ -67,10 +71,13 @@
         :else []))
 
 (defn select
-  "The ids of the checks of `type` that `sel` names, before waits pull anything in. A
-  selection that names nothing in `type` selects nothing there, except a keyword that names
-  neither a check of `type` nor a concern or a bundle check: that is refused, as an own check
-  id the type lacks."
+  "The ids of the checks of `type` that `sel` selects, without the checks that they wait on
+  ([[closure]] adds those). A selection may select nothing in `type`. Throws ex-info whose
+  `:error` is:
+
+  - `:recognitum/unknown-name` for a keyword that names no check of `type`, no concern and no
+    bundle check;
+  - `:recognitum/not-a-selection` where `sel` is not a selection."
   [type sel]
   (let [checks (:checks type)
         ids (set (map :id checks))
@@ -116,8 +123,8 @@
       (if (= more acc) acc (recur more)))))
 
 (defn floor
-  "The shape checks of `type` that every proof of `data` needs: those of its required fields
-  and of the optional fields `data` holds."
+  "The shape checks of `type` that every proof of `data` needs: those of the type's required
+  fields, and those of the optional fields that `data` holds."
   [type data]
   (set (for [c (:checks type) :let [k (:shape-of c)]
              :when (and k (or (not (contains? (:optional type) k)) (contains? data k)))]

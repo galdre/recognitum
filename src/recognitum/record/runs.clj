@@ -1,11 +1,15 @@
 (ns recognitum.record.runs
-  "A run of a type's checks over one value or a batch of values: [[check]] and [[recheck]] run
-  what a selection names in one value, [[check-all]] and [[recheck-all]] in many, and
-  [[run-batch]] runs a plan per type over many values in one run of the engine, so that values
-  that read the same source share its calls. A draft, or a value of an unsealed type, remembers
-  what passed and forgets what failed. [[run-jobs]] runs the jobs of a type's write in one call
-  of the engine. Hidden: the table per type of a batch, the partition into drafts and sealed
-  values, and the masks."
+  "Runs of a type's checks on one value or draft, or on a batch of them.
+
+  - [[check]] and [[recheck]] run what a selection names in one value or draft.
+  - [[check-all]] and [[recheck-all]] do the same for a batch, in one run of the engine, so
+    that values and drafts that read the same source, of one type or several, share its
+    calls. [[run-batch]] is the general form, with a plan per type.
+  - [[run-jobs]] runs a list of jobs in one call of the engine.
+
+  A draft, or a value of an unsealed type, remembers what passed and forgets what failed.
+  Hidden: the table per type of a batch, the partition into drafts and sealed values, and the
+  masks."
   (:require
    [clojure.set :as set]
    [recognitum.record.draft :refer [draft? marks-of]]
@@ -22,13 +26,13 @@
 ;;; ------------------------------------------------------------------ running checks
 
 (defn run
-  "The result of running every check of `type` on `data` except those in `assumed`."
+  "The result of running every check of `type` on `data` except those in `assumed`, as the
+  engine gives it: `{:failed {id failure} :blocked #{id}}`."
   [type data assumed]
   ((:recognitum.record/run type) data assumed))
 
 (defn minus
-  "`s` less the elements of `known`. Walks `s` through its iterator, and builds no set where
-  `known` holds every element."
+  "The set of the elements of `s` that `known` does not hold."
   [s known]
   (if (identical? s known)
     #{}
@@ -40,9 +44,15 @@
           acc)))))
 
 (defn run-jobs
-  "Runs the `:job` of every entry of `entries` in one call of `run-all`, hands each entry's
-  result to its `:done`, and returns `[i result to-run]` for each entry, its `:i` and its
-  `:to-run`."
+  "Runs the jobs of `entries` in one call of `run-all`, with no probe's overrides in force.
+  Each entry is a map:
+
+  - `:job`, an item of `run-all`, `[engine data assumed]`;
+  - `:done`, a function that is called with the job's result;
+  - `:i`, the index of its value or draft in the batch;
+  - `:to-run`, the checks the job runs.
+
+  Returns a vector of `[i result to-run]`, one for each entry, in order."
   [run-all entries]
   (if (empty? entries)
     []
@@ -65,12 +75,20 @@
 
 (defn check
   "Runs the checks `sel` names in `x`, and those they wait on, that `x` does not pass already.
-  A draft remembers what passed and forgets what failed. Returns true, or a report
-  `{:failed {id {:data :doc :blocked}} :blocked #{id}}` with `:pulled-back` where an `except`
-  removed a check that a wait then ran. The report holds under `:missing` the required fields
-  that `x`, a draft or a value of an unsealed type, lacks and whose presence `sel` asks
-  ([[asked]]), and is a report even where every check passed. Refuses a draft or a value of a
-  displaced definition, once `sel` is read, as [[seal]] refuses it, before any check runs."
+  A draft, or a value of an unsealed type, remembers what passed and forgets what failed.
+  Returns true, or a report:
+
+  - `:failed`, from each failed check's id to `{:data :doc :blocked}`, and `:blocked`, the set
+    of the ids of the checks that did not run because a check they wait on, directly or
+    through others, failed;
+  - `:pulled-back`, where an `except` in `sel` removed a check that then ran because a check
+    that ran waits on it;
+  - `:missing`, the required fields whose presence `sel` asks ([[asked]]) and that `x`, a
+    draft or a value of an unsealed type, lacks. Where any is, the answer is a report even
+    where every check passed.
+
+  Throws for a draft or a value of a displaced definition, once `sel` is read and before any
+  check runs, as [[recognitum.record.values/seal]] throws for it."
   [x sel]
   (let [type (value-type! x)
         picked (select/select type sel)]
@@ -83,8 +101,8 @@
 
 (defn recheck
   "Runs the checks `sel` names in `x` whether or not `x` passes them, and those they wait on that
-  `x` does not pass. A draft remembers as [[check]] does; a sealed value is left as it is.
-  Returns and refuses as [[check]] does."
+  `x` does not pass. A draft, or a value of an unsealed type, remembers as under [[check]]; a
+  sealed value is left as it is. Returns and throws as [[check]] does."
   [x sel]
   (let [type (value-type! x)
         picked (select/select type sel)
@@ -98,20 +116,26 @@
             sel picked to-run (absent-in type x sel))))
 
 (defn run-batch
-  "Runs, over every value in `xs`, what `plan` says for its type in one run of the engine, so
-  values that read the same source, of one type or several, share its calls. `(plan type)` is
-  `[sel kind]`: the selection, and the kind of run, nil for [[check]]'s, `:recheck` for
-  [[recheck]]'s, or `:seal` for a seal's, which adds the floor of each value and reports every
-  required field it lacks. Drafts and values of unsealed types remember as the single op would.
-  Returns a vector with one answer per value, each true or a report as [[check]] returns.
-  Refuses the whole of `xs` before anything runs where it holds a draft or a value of a
-  displaced definition, as [[check]] refuses that one."
+  "Runs, on every value or draft in `xs`, what `plan` says for its type, in one run of the
+  engine, so that values and drafts that read the same source, of one type or several, share
+  its calls. `(plan type)` is `[sel kind]`:
+
+  - `sel`, the selection;
+  - `kind`, the kind of run: nil for [[check]]'s, `:recheck` for [[recheck]]'s, or `:seal`
+    for a seal's, which adds the floor of each value (the shape checks of its required fields
+    and of the optional fields it holds) and reports every required field it lacks.
+
+  Drafts and values of unsealed types remember as under [[check]] or [[recheck]]. Returns a
+  vector with one answer for each element of `xs`, true or a report as [[check]] returns.
+  Throws, before anything runs, where `xs` holds a draft or a value of a displaced
+  definition, as [[check]] throws for it."
   [xs plan]
   (let [xs (vec xs)
         n (count xs)
-        ;; each type, to what its selection picks in it, the closure of that, its mask, the
-        ;; selection, the kind of run, and the fields whose presence the run reports, or nil
-        ;; where it reports none: the same for every value of the type in one call
+        ;; each type, to `[picked closed mask sel kind ask]`: what its selection picks in it,
+        ;; the closure of that and its mask, the selection, the kind of run, and the required
+        ;; fields whose presence the run reports, or nil for none. One entry serves every
+        ;; value of the type
         per-type (java.util.IdentityHashMap.)
         types (mapv (fn [x]
                       (let [type (value-type! x)]
@@ -128,8 +152,8 @@
                                                  (not-empty (if (= :seal kind) (:recognitum.record/required-v type) (asked type sel)))])))
                         type))
                     xs)
-        ;; the drafts, and values of unsealed types, of each type, by index; each runs in its
-        ;; type's gate, which reads its memory and runs what it finds
+        ;; each type, to the indices of its drafts, or of its values where it is unsealed.
+        ;; These run through the type's installed write, which alone can write their memories
         drafts (java.util.IdentityHashMap.)
         order (java.util.ArrayList.)
         ;; each sealed value that has anything to run, run here
@@ -140,8 +164,8 @@
                          type (types i)
                          pt (.get per-type type)]
                      (if (or (draft? x) (unsealed? type))
-                       ;; through the mask, where the type has one, a draft that passes every
-                       ;; check in the closure has nothing to run for check
+                       ;; with masks, a draft known to pass every check in the closure has
+                       ;; nothing to run, under the kind of run of `check`
                        (if (let [m (nth pt 2)]
                              (and m (nil? (nth pt 4)) (draft? x)
                                   (zero? (bit-and-not (long m) (passes-mask type (.-data ^Draft x) (marks-of x))))))
@@ -199,17 +223,19 @@
                  type ask))))))
 
 (defn check-all
-  "Runs, over every value in `xs`, the checks `sel` names in it and those they wait on that it
-  does not pass already, in one run of the engine, so values that read the same source, of one
-  type or several, share its calls. Each draft, and each value of an unsealed type, remembers
-  what passed and forgets what failed, as under [[check]]. Returns a vector with one answer
-  per value, each true or a report as [[check]] returns."
+  "Runs, on every value or draft in `xs`, the checks `sel` names in it and those they wait on
+  that it does not pass already, in one run of the engine, so that values and drafts that
+  read the same source, of one type or several, share its calls. Each draft, and each value
+  of an unsealed type, remembers what passed and forgets what failed, as under [[check]].
+  Returns a vector with one answer for each element of `xs`, true or a report as [[check]]
+  returns. Throws as [[run-batch]] does."
   [xs sel]
   (let [p [sel nil]]
     (run-batch xs (fn [_] p))))
 
 (defn recheck-all
-  "Runs, over every value in `xs`, what [[recheck]] would run on it, in one run of the engine.
+  "Runs, on every value or draft in `xs`, what [[recheck]] would run on it, in one run of the
+  engine.
   Each draft, and each value of an unsealed type, remembers as under [[recheck]]; a sealed
   value is left as it is. Returns as [[check-all]] does."
   [xs sel]

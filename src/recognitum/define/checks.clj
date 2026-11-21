@@ -1,10 +1,9 @@
 (ns recognitum.define.checks
-  "A type's checks, as `defproven` compiles them: [[type-checks]] answers, for the checks
-  sections of a definition, the bindings of its bundles' inputs, the symbol that holds its
-  input map, and every check the type runs: its own clauses compiled, and the checks each bundle
-  binding brings, less those an own check overrides. Throws the refusal of the definition where
-  a binding, a check, an override or a wait is wrong. Hidden: how bindings, own checks,
-  overrides and waits are read."
+  "A type's checks, as `defproven` compiles them from the checks sections of a definition: its
+  own clauses compiled, and the checks that each bundle binding brings, less those that an own
+  check overrides. [[type-checks]] returns them, or throws the refusal of the definition where a
+  binding, a check, an override or a wait is wrong. Hidden: how bindings, own checks, overrides
+  and waits are read."
   (:require
    [clojure.string :as str]
    [recognitum.body :as body :refer [fail!]]
@@ -15,8 +14,10 @@
    [recognitum.record :as record]))
 
 (defn- binding-gate
-  "The field that `^{:when-extant field}` on a bundle var names, refused where it is not an
-  optional field."
+  "The `:when-extant` field of a bundle binding, or nil: the field that `^{:when-extant field}`
+  names on the binding's head, `marker`. While that field is absent, the binding's checks pass
+  without running. Refuses any other metadata key, and a field that is not an optional field
+  of the type."
   [ctx marker fsyms optional]
   (let [mm (dissoc (meta marker) :line :column :end-line :end-column :file)]
     (when-let [bad (seq (remove #{:when-extant} (keys mm)))]
@@ -35,7 +36,11 @@
           :else f)))))
 
 (defn- parse-binding
-  "A bundle bound in a type: the bundle, its input clauses compiled, and its gate."
+  "A bundle binding, parsed: `{:var :sym :bundle :inputs :gate}`. `:sym` is the bundle's
+  qualified name; `:inputs` maps each input's symbol to its clause's `{:reads :form}`, as
+  [[recognitum.body/analyze]] returns them; `:gate` is the key of the binding's `:when-extant`
+  field, or nil. Refuses a head that is not a bundle, an input clause that names no input of
+  the bundle, has waits or is written twice, and an input that no clause binds."
   [ctx fctx {:keys [marker clauses]} fsyms optional key-of]
   (let [v (resolve-var marker)
         _ (when-not (= :bundle (kind-of v))
@@ -60,7 +65,8 @@
      :gate (some-> (binding-gate fctx marker fsyms optional) key-of)}))
 
 (defn- check-ref
-  "What a qualified symbol in a wait or an override names: a check or a bundle bound here."
+  "What the qualified symbol `s` names in a wait or an override: a check of a bundle bound here,
+  or a bundle bound here. Refuses anything else; `what` opens the message."
   [cctx bound tname s what]
   (let [v (resolve-var s)]
     (case (kind-of v)
@@ -80,9 +86,13 @@
                                     ": no such var"))))))
 
 (defn- own-wait-ids
-  "The ids of the checks the own check `name` waits on: an own check named in `waits`, or a
-  bundle's check, or every check of a bundle, named by a qualified symbol. Refuses any other
-  wait."
+  "The ids of the checks that own check `name` waits on. Each symbol of `waits` names:
+
+  - by a plain symbol, an own check;
+  - by a qualified symbol, a check of a bound bundle, or a bound bundle, whose every check is
+    waited on.
+
+  Refuses any other wait."
   [cctx own-names key-of tname bound name waits]
   (set (mapcat (fn [w]
                  (cond
@@ -106,7 +116,10 @@
                waits)))
 
 (defn- own-check
-  "One clause of the type's own section, compiled."
+  "One own clause, parsed, compiled to the check that `recognitum.record/define-type` takes. A
+  clause with `:override` replaces the check of a bound bundle that its qualified name names: it
+  keeps that check's id, adds that check's concerns to its own, and takes its binding's
+  `:when-extant` field."
   [{:keys [fctx fsyms own-names bound gate-of tname key-of compile-body]}
    {:keys [name waits body override? concerns line doc]}]
   (let [cctx (assoc fctx :line line :fetch? true)
@@ -131,9 +144,9 @@
      :run (compile-body (sourced-reads form))}))
 
 (defn- bundle-checks-of
-  "The checks the bundle `bindings` bring, in each bundle's order, less those `overridden`
-  names: each reads the fields its inputs read, and runs the bundle's check on the inputs
-  bound to the local that `input-sym` names for its binding."
+  "The checks that `bindings` bring, each bundle's in its order, less those whose ids are in
+  `overridden`. Each check reads the fields that its inputs read, and runs the bundle's check on
+  the inputs that its binding's local holds; `input-sym` names that local."
   [bindings overridden key-of input-sym]
   (vec (for [{:keys [bundle sym inputs gate]} bindings
              n (:order bundle)
@@ -159,10 +172,14 @@
                  (fn [a b] (not (contains? (explicit a) b))))))
 
 (defn type-checks
-  "The checks of a type, as [bindings input-sym all]: its bundle bindings parsed from
-  `sections`, the local that holds each binding's inputs, and every check, its own sections'
-  clauses compiled and then the checks its bindings bring. Refuses two own sections, a bundle
-  bound twice, two clauses or checks of one name, and waits on a check left out or in a cycle."
+  "The checks of a type, from its checks `sections`, as `[bindings input-sym all]`:
+
+  - `bindings`, its bundle bindings, parsed;
+  - `input-sym`, a map from each binding's bundle name to the local that holds its inputs;
+  - `all`, every check: the own clauses compiled, then the checks that the bindings bring.
+
+  Refuses `rec/checks` written twice, a bundle bound twice, two clauses or two checks of one
+  name, a wait on a check that is left out, and waits that form a cycle."
   [ctx fctx sections checks-marker fsyms optional key-of tname compile-body]
   (let [own-secs (filter #(checks-marker? checks-marker (:marker %)) sections)
         _ (when (> (count own-secs) 1) (fail! ctx "rec/checks appears twice"))

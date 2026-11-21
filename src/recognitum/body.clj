@@ -3,13 +3,15 @@
   macros with its locals in `&env`, refuses the mistakes a body can make, and writes the body
   in a form that says what it reads.
 
-  A check body sees its fields (or a bundle's inputs) as locals. `rec/extant?`,
-  `rec/when-extant`, `rec/fetch` and `rec/fetch-each` are legal only inside one, in call
-  position, and the reads only outside any fn the body builds and outside `locking`.
+  A check body sees its fields (or a bundle's inputs) as locals. The body macros
+  `rec/extant?`, `rec/when-extant`, `rec/fetch` and `rec/fetch-each` are legal only in call
+  position, inside a check body or an input clause. `rec/fetch` and `rec/fetch-each`, which read
+  sources, are legal only in a check body, outside any fn that the body builds and outside
+  `locking`.
 
-  The walk renames every local the body binds to a fresh symbol and writes every field read
-  as `(&field key)`, so no field symbol is left in what it returns. What the body reads is
-  then a scan of that form, which needs no knowledge of scope.
+  The walk gives every local that the body binds a fresh name, and writes every read of a field
+  as `(&field key)`, so no field symbol is left in the form that [[analyze]] returns. What the
+  body reads is then found by a scan of that form, which needs no knowledge of scope.
 
   Nothing here is part of the public API."
   (:require
@@ -19,8 +21,8 @@
    [clojure.lang Compiler Compiler$LocalBinding]))
 
 (def marker
-  "The local that is in `&env` exactly while a check body is being read. The body macros
-  look for it."
+  "The local that is in `&env` exactly while a check body or an input clause is being read. The
+  body macros look for it."
   (gensym "recognitum_check_body__"))
 
 (defn absent-read
@@ -76,9 +78,9 @@
   (cond->> (when (coll? x) (seq x)) (meta x) (cons (meta x))))
 
 (defn- refuse-reserved-in!
-  "Refuses a reserved name anywhere in `x`, metadata included: metadata, or a part of a body
-  that is neither evaluated nor quoted, such as a class, a member or method name, a var's name,
-  a `case` constant or a bound symbol."
+  "Refuses a reserved name anywhere in `x`, its metadata included. For the parts of a body that
+  the walk does not visit as code: metadata, and parts that are neither evaluated nor quoted,
+  such as a class, a member or method name, a var's name, a `case` constant or a bound symbol."
   [ctx x]
   (doseq [s (tree-seq #(or (coll? %) (some? (meta %))) parts x)] (refuse-reserved! ctx s)))
 
@@ -94,8 +96,8 @@
           :else       nil)))
 
 (defn- local-binding
-  "A compiler local for a macro's `&env`. `num` is positive: the compiler takes local 0 to be
-  `this`, and a macro that expands a form headed by local 0 throws."
+  "A compiler local for a macro's `&env`. `num` must be positive: the compiler takes local 0 to
+  be `this`, and a macro that expands a form headed by local 0 throws."
   [num sym tag arg?]
   (Compiler$LocalBinding. (int num) sym tag nil (boolean arg?) nil))
 
@@ -176,10 +178,10 @@
     (not (or (str/includes? (name s) ".") (str/starts-with? (name s) "[")))))
 
 (defn- resolve-in
-  "What `s` names here: a var, a class the namespace maps, or nil. A symbol that can name no
-  var but a class by its full name is not looked up: the lookup would make the class loader of
-  the code being compiled record the class, so that a `deftype` of that name in the body,
-  compiled again, could not define it."
+  "What `s` names here: a var, a class the namespace maps, or nil; nil for a local or a field.
+  A symbol that can name only a class by its full name ([[may-name-a-var?]] is false) is not
+  looked up: the lookup would make the class loader of the code being compiled record the
+  class, so that a `deftype` of that name in the body, compiled again, could not define it."
   [ctx s]
   (when-not (or (local? ctx s) (field? ctx s) (not (may-name-a-var? ctx s)))
     (try (binding [*ns* (:ns ctx *ns*)] (resolve (:env ctx) s)) (catch Exception _ nil))))
@@ -281,8 +283,8 @@
                    :else         (recur xs (conj out (walk-method c x))))))))
 
 (defn- walk-special
-  "A special form. Each local it binds is renamed in its scope. A special form this does not
-  name is refused."
+  "`form`, a special form, walked: each local that it binds is renamed within its scope. Refuses
+  a special form that this function does not handle."
   [ctx [op & args :as form]]
   (case op
     quote form
@@ -344,7 +346,9 @@
     (fail! ctx (str op " in a check body is not supported: " (pr-str form)))))
 
 (defn- presence
-  "`(rec/extant? f)` once checked: the read form the body tests in its place."
+  "The read form `(&extant? key)` that replaces `form`, a call of `rec/extant?` or
+  `rec/when-extant` on the field `f`. Refuses an `f` that is not a field; warns where `f` is a
+  required field, which is always present."
   [ctx h [f & more :as args] form]
   (cond
     (or more (empty? args) (not (symbol? f)))
@@ -417,11 +421,13 @@
 ;;; ------------------------------------------------------------------ the walk's output
 
 (defn- evaluated
-  "The parts of `form`, an output of [[walk]], in positions the compiler evaluates. Left out:
-  a quoted form, a var's name, a `def`'s name, a bound symbol or param, the member of `.`,
-  the class of `new` or `catch`, a `case` constant, the interfaces and method names of
-  `reify*` and `deftype*`, and the head of a special form. Kept: the metadata the compiler
-  evaluates, that of a `def`'s name, of a `fn*` or `reify*` form, and of a vector, map or set."
+  "The parts of `form`, an output of [[walk]], in positions that the compiler evaluates.
+
+  - Left out: a quoted form, a var's name, a `def`'s name, a bound symbol or param, the member
+    of `.`, the class of `new` or `catch`, a `case` constant, the interfaces and method names of
+    `reify*` and `deftype*`, and the head of a special form.
+  - Kept: the metadata that the compiler evaluates, which is that of a `def`'s name, of a `fn*`
+    or `reify*` form, and of a vector, a map or a set."
   [form]
   (cond
     (seq? form)
@@ -472,13 +478,18 @@
     `:fetch`, `:fetch-each`, `:extant?` or `:when-extant`;
   - `:fetch?`, whether the body may read sources; where it may not, `:no-fetch` names it.
 
-  Returns `{:form :reads :sources :fetches?}`: the body with every macro expanded, every
-  local it binds renamed to a fresh symbol, and each read written as a read form,
-  `(&field key)`, `(&extant? key)`, `(&fetch src k)` or `(&fetch-each src ks)`; the field
-  symbols it reads; the source forms that name a var or a constant; and whether it reads any
-  source. The last three are a scan of the returned form. Throws on a refused body, on a body
-  that writes `&field`, `&fetch`, `&fetch-each` or `&extant?` or an old read form such as
-  `recognitum.checks/fetch`, and where a field symbol is left in the returned form."
+  Returns `{:form :reads :sources :fetches?}`:
+
+  - `:form`, the body with every macro expanded, every local it binds renamed to a fresh
+    symbol, and each read written as a read form: `(&field key)`, `(&extant? key)`,
+    `(&fetch src k)` or `(&fetch-each src ks)`;
+  - `:reads`, the field symbols that the body reads or tests for presence;
+  - `:sources`, the distinct source forms that name a var or are a constant;
+  - `:fetches?`, whether the body reads any source.
+
+  Throws the refusal of the definition on a refused body, among them a body that writes
+  `&field`, `&fetch`, `&fetch-each` or `&extant?` or an old read form such as
+  `recognitum.checks/fetch`, and a body that leaves a field symbol in the returned form."
   [ctx body]
   (let [num (atom 0)
         env (merge (:call-env ctx)
@@ -510,8 +521,9 @@
     (if (identical? x none) (throw (absent-read k)) x)))
 
 (defn- with-reads
-  "`form`, an output of [[analyze]], with each field read and presence test a call on the value
-  `v`. A read form is only where the walk wrote it, or quoted."
+  "`form`, an output of [[analyze]], with each `(&field k)` written as a [[read-input]] of `k`
+  from the value `v`, and each `(&extant? k)` as `(contains? v k)`. A quoted form stays as it
+  is; anywhere else, a read form is one that the walk wrote."
   [v form]
   (cond
     (seq? form)
@@ -526,8 +538,8 @@
     :else             form))
 
 (defn checked-fn
-  "The form of a function of a value that evaluates `form`, an input clause [[analyze]]
-  returned, each field read throwing where the field is absent."
+  "The form of a function of a value that evaluates `form`, an input clause's `:form` as
+  [[analyze]] returns it. Each read of a field throws [[absent-read]] where the field is absent."
   [form]
   (let [v (gensym "value")]
     `(fn [~v] ~(with-reads v form))))

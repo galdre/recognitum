@@ -1,9 +1,9 @@
 (ns recognitum.engine.waves
   "A run of engines over a group of values, in waves: [[run-all]]. Every check that can start
   runs until it finishes or parks at a read whose answer is not yet known; then each source is
-  called once with every key parked on it, and the next wave begins. Hidden: the plans an
-  engine keeps for its last assumed sets, the slots of a run, the parked reads, and how a wave
-  calls its sources."
+  called once with the keys that the parked checks asked of it, and the next wave begins.
+  Hidden: the plans that an engine keeps for its last assumed sets, the slots of a run, the
+  parked reads, and how a wave calls its sources."
   (:require
    [recognitum.engine.runtime :as rt]
    [recognitum.engine.step :refer [nothing-failed step]])
@@ -15,15 +15,18 @@
 
 ;;; ------------------------------------------------------------- plans
 
-;; The checks of an engine that one run starts, numbered 0 to k-1 in wait order: `at` holds
-;; each one's position in the engine, `fns` its body, `counts` how many of its waits run,
-;; `starts` those with none, and `dep-off`/`dep-flat` the checks that run and wait on it, the
-;; dependents of check i being `dep-flat` from `(dep-off i)` to `(dep-off (inc i))`.
+;; A plan holds the `k` checks of an engine that run for one assumed set, `key`, numbered 0 to
+;; k-1 in wait order. By that number:
+;; - `at` holds each check's position in the engine, and `fns` its body;
+;; - `counts` holds how many of its waits run;
+;; - `starts` lists the checks whose count is 0;
+;; - the checks that run and wait on check i are `dep-flat` from index `(dep-off i)` up to, and
+;;   not including, `(dep-off (inc i))`.
 (deftype Plan [key ^long k ^ints at ^objects fns ^ints counts ^ints starts ^ints dep-off ^ints dep-flat])
 
 (defn- plan
-  "The plan of `e` in which the checks at the positions `local` maps to 0 and up run, `k` of
-  them; `local` holds -1 for the others."
+  "The plan of `e`, for the assumed set `key`, that runs `k` checks. `local` maps each position
+  in `e` to the check's number in the plan, or to -1 for a check that does not run."
   [^Engine e key ^ints local k]
   (let [k (int k)
         n (alength local)
@@ -65,8 +68,9 @@
       (Plan. key k at fns counts starts dep-off dep-flat))))
 
 (defn- plan-of-set
-  "The plan of `e` that runs every check but those in `assumed`, a set: the one kept for this
-  set where there is one."
+  "The plan of `e` that runs every check but those in `assumed`, a set. Where `e` keeps a plan
+  for this very set (`identical?`), returns it; else makes a plan, which `e` keeps in place of
+  its oldest."
   ^Plan [^Engine e assumed]
   (let [^objects plans (.-plans e)
         found (loop [i 0]
@@ -96,6 +100,10 @@
 
 (def ^:private none (Object.))
 
+;; A slot is one item of a run. By a check's number in the plan, `state` holds nil until the
+;; check starts or is blocked, then one of the keywords :recognitum.engine/running, /passed,
+;; /failed and /blocked; `remaining` holds how many of its waits have not passed; `failures`
+;; holds its failure data.
 (deftype Slot [^Engine engine ^Plan plan value ^objects state ^ints remaining ^objects failures])
 
 (deftype Source [src ^HashMap answers ^ArrayList wave])
@@ -103,8 +111,8 @@
 (deftype Waiting [^Slot slot ^long c ^Park park ^Source source])
 
 (defn- answer
-  "The answer to `p` from `answers`, a Failure when the source failed a key it asked for, or
-  `none` while a key is unanswered."
+  "The answer to the read `p` from `answers`, the answers of its source: a Failure where the
+  source failed a key that `p` asked for, or `none` while a key of `p` has no answer."
   [^HashMap answers ^Park p]
   (letfn [(fail [a] (Failure. (.-src p) a))]
     (if (.-one? p)
@@ -135,7 +143,9 @@
   (Object.))
 
 (defn- call-wave!
-  "Calls each source once with the distinct keys parked on it that it was not yet asked for."
+  "Calls each source that a read in `waiting` asks of, once, with the keys that those reads
+  ask and that the run has not asked of it before, and stores the answers. A source that throws
+  an Exception answers that exception for every key of its call."
   [^ArrayList waiting]
   (let [called (ArrayList. 2)]
     (dotimes [i (.size waiting)]
@@ -160,7 +170,8 @@
             _ (.clear wave)
             ans (try ((.-src s) ks)
                      (catch Exception e
-                       ;; the throw cleared the flag, and the run goes on as a failed read
+                       ;; the throw cleared the thread's interrupt flag: set it again, and
+                       ;; go on with the call's reads failed
                        (when (instance? InterruptedException e) (.interrupt (Thread/currentThread)))
                        e))]
         (dotimes [j (count ks)]
@@ -173,7 +184,7 @@
   (plan-of-set e (if (set? assumed) assumed (set assumed))))
 
 (defn- result-of
-  "The result of a run of `slot` that ended."
+  "The result for `slot` after the run ended: `{:failed {id failure} :blocked #{id ...}}`."
   [^Slot slot]
   (let [^Plan p (.-plan slot)
         ids (.-ids ^Engine (.-engine slot))
@@ -190,16 +201,24 @@
                  (if (identical? s :recognitum.engine/blocked) (conj (or blocked #{}) (nth ids (aget at c))) blocked)))))))
 
 (defn run-all
-  "Runs `items`, a sequence of `[engine value assumed]`, as one group. `value` is a map from key
-  to field value; the checks in `assumed`, a set of ids, count as passed and do not run. One
-  result per item, in order: `{:failed {id failure} :blocked #{id ...}}`.
+  "Runs `items`, a sequence of `[engine value assumed]`, as one group, and returns one result
+  per item, in order: `{:failed {id failure} :blocked #{id ...}}`.
 
-  A check fails with what its body returns, unless that is exactly `true`; with
-  `{:absent key}` when it reads an absent field; and with `{:fetch-failed source :cause
-  exception}` when a read failed. Each of these two is an ordinary exception inside the body,
-  which the body may catch. Anything else a body throws propagates out of `run-all`, which
-  then returns nothing for any item. Every check sees the dynamic bindings in force where
-  `run-all` was called."
+  - `value` is a map from key to field value.
+  - `assumed` is a collection of ids. A check in `assumed` counts as passed and does not run.
+
+  A check passes where its body returns exactly `true`. Otherwise it fails, with one of these
+  as its failure data:
+
+  - what its body returned;
+  - `{:absent key}`, where it read a field that `value` lacks;
+  - `{:fetch-failed source :cause exception}`, where a read of a source failed.
+
+  A check that waits on a check that failed or was blocked is blocked: it does not run. A read
+  of an absent field and a failed read each throw an ordinary exception inside the body, which
+  the body may catch. Anything else that a body throws propagates out of `run-all`, which then
+  returns no result. Every check sees the dynamic bindings in force where `run-all` was
+  called."
   [items]
   (let [items (if (vector? items) items (vec items))
         n-items (count items)

@@ -1,17 +1,36 @@
 (ns recognitum.record
-  "The record layer: types whose values read as maps and carry proof that their checks passed,
-  drafts that remember which checks pass, checked writes, optional fields and closed types.
-  [[define-type]] defines a type from compiled checks, a proof strategy and a check engine,
-  and names neither. It compiles the spec into the type map, asks the strategy for the type's
-  classes and the handle that holds its key, builds the type's write from what its children
-  provide (`recognitum.record.memory` and `.draft` for what passes, `.views` for what a write's
-  checks read, `.runs` for running checks, `.reports` for refusals), installs it, and displaces
-  the definition it succeeds. What acts on values of any type it defined is in
-  `recognitum.record.values`, `.runs`, `.probe`, `.types` and `.walk`.
+  "The record layer: types whose values read as maps and are proven to have passed their
+  checks, drafts that remember which checks pass, checked writes, optional fields and closed
+  types.
 
-  The key that mints a type's values and marks its drafts never leaves the closure
-  [[define-type]] builds: it is reachable only through the type's installed write, its key
-  guards and its change guard, each of which runs the checks it stands for."
+  [[define-type]] defines a type from compiled checks, a proof strategy and a check engine,
+  which it receives as arguments, so that this layer names no strategy and no engine. It
+  compiles the spec into the type map, asks the strategy for the type's classes and its
+  handle, builds the type's installed write and guards from what the children of this
+  namespace provide (`recognitum.record.memory` and `.draft` for what passes, `.views` for
+  what a write's checks read, `.runs` for running checks, `.reports` for refusals), installs
+  them, and displaces the definition it succeeds. The functions that act on values of any
+  type are in `recognitum.record.values`, `.runs`, `.probe`, `.types` and `.walk`.
+
+  Terms:
+
+  - the **type map**, or the type: the map that [[define-type]] returns, which every function
+    of the layer takes or finds from a value, a draft or a class;
+  - the **installed write**: the function that [[define-type]] installs on the type's handle,
+    which [[recognitum.record.types/gate]] answers. Its three-argument arity takes an
+    operation keyword, and each operation, such as making a value or sealing a draft, is one
+    **arm**;
+  - the **readers** of a key: the checks that read it;
+  - the **guards**: a key guard for each key whose readers read no source, which an `assoc`
+    of that key calls, and the change guard, which every other change calls;
+  - **masks**: in a type of at most 64 checks, each check has a bit of a `long`, and a set of
+    checks is also kept as the `long` of their bits;
+  - a **displaced** definition: one that a later definition of the same name replaced.
+
+  The access key, which seals a type's values, never leaves the closures that [[define-type]]
+  makes. Code outside reaches it only by calling the installed write, a key guard or the
+  change guard, and each of these produces a sealed value only after the checks it runs
+  pass."
   (:require
    [clojure.set :as set]
    [recognitum.proof :as proof]
@@ -36,9 +55,10 @@
 (def ^:private none (Object.))
 
 (defonce ^:private definitions
-  ;; each type name, to a weak reference to the definition that a later definition of the name
-  ;; displaces. Weak, so that a definition nothing else holds is collected with its class: its
-  ;; values, drafts, constructors and class all reach it, and nothing else needs displacing.
+  ;; each type name, to a weak reference to its latest definition, which the next definition of
+  ;; the name displaces. Weak, because the values, drafts, constructors and class of a
+  ;; definition all reach its type map: once nothing holds the type map, nothing is left to
+  ;; displace, and it is collected with its class.
   (java.util.concurrent.ConcurrentHashMap.))
 
 (defonce ^:private cleared
@@ -46,9 +66,10 @@
   (java.lang.ref.ReferenceQueue.))
 
 (defn- succeed!
-  "Makes `type` the definition of type name `n` that the next definition of `n` displaces.
-  Returns the definition `type` succeeds, which it displaces, or nil. One atomic replacement,
-  so of two definitions of `n` at once, each succeeds a different one and the later stays."
+  "Records `type` as the latest definition of type name `n`, and returns the definition it
+  replaces there, or nil; the caller displaces that one. The replacement is atomic: of two
+  definitions of `n` made at once, each replaces a different one, and the one recorded last
+  stays."
   [n type]
   (loop []
     (when-let [r (.poll ^java.lang.ref.ReferenceQueue cleared)]
@@ -66,10 +87,11 @@
   (reduce disj (set/difference to-run blocked) (keys failed)))
 
 (defn bound-check
-  "A compiled check of a bundle, run in a type: `run` given the map from each input key to
-  what its input clause in `inputs` (a map from input key to a function of the value)
-  answers. `inputs` holds the clauses of the inputs the check reads, and each runs only when
-  the check runs. An input whose clause reads an absent field is absent."
+  "The compiled check that runs `run`, a bundle's compiled check, in a type. `inputs` maps each
+  input key that `run` reads to its input clause, a function of the value. The check calls
+  each clause on the value, then calls `run` with the map from each input key to its clause's
+  answer. An input whose clause reads an absent field is left out of that map, so `run` reads
+  it as absent."
   [run inputs]
   (fn [value]
     (run (reduce-kv (fn [m k f]
@@ -80,21 +102,23 @@
                     {} inputs))))
 
 (defn- present-only
-  "`run`, where the field `k` is present; passing where it is absent."
+  "A compiled check that runs `run` where the value holds `k`, and passes without running
+  where the value lacks `k`."
   [k run]
   (fn [value] (if (contains? value k) (run value) true)))
 
 ;;; ------------------------------------------------------------------ one-key writes
 
-;; The view of the types that place no view of their own.
+;; The view class of the key guards of every type whose spec gives no `:guard`.
 (view-type With)
 
 ;;; ------------------------------------------------------------------ definition
 
 (defn- in-group-order
-  "`entries` in the order a group's run takes them: those with no `:type` first, as they
-  stand, then those of each type, the types in the order `group-by` gives them where the
-  entries are taken by their `:i`, ascending."
+  "`entries` in the order a group's run takes them. Where the entries that have a `:type` all
+  have the same one, `entries` as they stand. Else the entries with no `:type` first, as they
+  stand, then the others grouped by `:type`, each group ordered by `:i`, and the groups in the
+  order of the map that `group-by` returns."
   [entries]
   (let [typed (filterv :type entries)]
     (if (every? #(identical? (:type (first typed)) (:type %)) typed)
@@ -104,8 +128,9 @@
             (vals (group-by :type (sort-by :i typed)))))))
 
 (defn waits-of
-  "Each check of `checks` (each `{:id :waits :reads :shape-of}`), to every check it waits on:
-  those its `:waits` names, and the shape check of each key it `:reads`, other than itself."
+  "A map from the id of each check of `checks` (each `{:id :waits :reads :shape-of}`) to the
+  set of every check it waits on: those its `:waits` names, and the shape check of each key it
+  `:reads`, other than itself."
   [checks]
   (let [shape-id (into {} (keep (fn [c] (when-let [k (:shape-of c)] [k (:id c)]))) checks)]
     (into {} (for [{:keys [id waits reads]} checks]
@@ -139,13 +164,13 @@
      :by-id    (update-vals by-id #(dissoc % :run))
      :ids      (set (keys by-id))
      :readers  (apply merge-with into {} (for [c checks, k (:reads c)] {k #{(:id c)}}))
-     ;; each key, to the checks that read it, as a vector, which reduces without a seq
+     ;; each key, to the ids of its readers, as a vector, which reduces without a seq
      ::readers-v (apply merge-with into {} (for [c checks, k (:reads c)] {k [(:id c)]}))
      :strategy strategy
      :run-all  run-all
      :engine   engine
-     ;; every check but those in `assumed`, through the runner where every check left reads no
-     ;; source
+     ;; `(run data assumed)`: the result of every check but those in `assumed`, on the calling
+     ;; thread through `pure` where every check that reads a source is in `assumed`
      ::run     (fn [data assumed]
                  (cond (= (count assumed) n-ids)
                        {:failed {} :blocked #{}}
@@ -161,23 +186,21 @@
   (proof/class-name strategy type-name))
 
 (defn refusal
-  "Nil where `strategy` would define a type whose values implement `interfaces` with methods of
-  `signatures`, as [[define-type]] takes them, else the strategy's refusal of that definition:
-  a map with `:kind`, `:message`, and, by kind, `:method` (`[name arity]`, the name a symbol
-  spelled as the signature spells it) or `:interfaces`.
-  Asked before the methods' functions exist: each signature is passed with a placeholder
-  function. `recognitum.define` gives its own message, at the method's line, for the kind
-  `:map-method` where `:method` names a method of the definition; for every other kind it
-  gives `:message`."
+  "The refusal `strategy` would make of a type whose values implement `interfaces` with methods
+  of `signatures`, as [[define-type]] takes them, or nil where it would define the type. Takes
+  the signatures alone, so that a macro can ask before the methods' functions exist. A
+  refusal is a map with `:kind`, `:message`, and, by kind, `:method` (`[name arity]`, the name
+  a symbol spelled as the signature spells it) or `:interfaces`."
   [strategy interfaces signatures]
   (proof/refusal strategy {:interfaces (vec interfaces)
                            :methods (into {} (map (fn [sig] [sig (fn [& _])])) signatures)}))
 
 (defn- make-run-known
-  "The `(run-known km known)` of a type with masks: a run of the checks that the mask `km` of
-  checks known to pass leaves, `known` as a set. Where none of those reads a source, the
-  runner over them, kept in `runs` under `km`; past 1000 masks, a mask not kept runs every
-  check but the known through `run*`, building nothing."
+  "The `(run-known km known)` of a type with masks. `km` is the mask of the checks known to
+  pass, and `known` the same checks as a set. Returns a function of a map that runs every
+  check outside `known` on it and returns the result. Where no check outside `known` reads a
+  source, that function is a runner's, kept in `runs` under `km` while `runs` has room; else it
+  calls `run*`."
   [{:keys [fetching-m runner engine hot all-mask run*]} ^java.util.concurrent.ConcurrentHashMap runs]
   (fn [^long km known]
     (or (.get runs km)
@@ -189,9 +212,9 @@
           (fn [data] (run* data known))))))
 
 (defn- make-clean?
-  "The `(clean? result)` of a type: whether a run's result has nothing failed or blocked, first
-  by identity with the result last found clean, which `clean`, a volatile, holds, as results
-  are immutable."
+  "The `(clean? result)` of a type: whether a run's result has nothing failed and nothing
+  blocked. `clean`, a volatile, holds the result last found clean, and a result identical to
+  it answers true at once."
   [clean]
   (fn [result]
     (or (identical? result (.deref ^clojure.lang.Volatile clean))
@@ -206,9 +229,9 @@
   (fn [data] (not (reduce (fn [_ k] (if (contains? data k) true (reduced false))) true required-v))))
 
 (defn- make-refuse!
-  "The `(refuse! data result may-lack?)` of `type`: throws the failure of `result`, the run of
-  the checks on `data`, where a check failed or, where `may-lack?`, a required field is
-  absent."
+  "The `(refuse! data result may-lack?)` of `type`: throws the `:recognitum/check-failed`
+  failure of `result`, the run of the checks on `data`, where a check failed or, where
+  `may-lack?`, a required field is absent. Returns nil otherwise."
   [type clean?]
   (fn [data result may-lack?]
     (let [absent (when may-lack? (missing type data))]
@@ -216,8 +239,8 @@
         (throw (check-failed type (when-not (clean? result) (report type result)) absent))))))
 
 (defn- make-own!
-  "The `(own! old)` of `type`: refuses `old` where it is not a value of the class `vc`, or
-  where `current`, a volatile, holds false."
+  "The `(own! old)` of `type`: throws `:recognitum/not-a-value` where `old` is not a value of
+  the class `vc`, and `:recognitum/displaced` where `current`, a volatile, holds false."
   [{:keys [vc type current]}]
   (fn [old]
     (when-not (instance? vc old)
@@ -227,7 +250,8 @@
       (throw (displaced-refusal (:name type) old)))))
 
 (defn- make-own-memo
-  "The `(own-memo d)` of `type`: the memory of `d`, a draft of `type`; refuses anything else."
+  "The `(own-memo d)` of `type`: the memory of `d`, a draft of `type`. Throws
+  `:recognitum/not-a-draft` for anything else."
   [type]
   (fn [d]
     (let [m (when (draft? d) (marks-of d))]
@@ -237,17 +261,17 @@
       m)))
 
 (defn- make-own-draft
-  "The `(own-draft d)` of `type`: `[data passes memory]` of `d`, a draft of `type`, through
-  `own-memo`."
+  "The `(own-draft d)` of `type`: `[data known memory]` of `d`, a draft of `type`: its
+  entries, the checks its memory shows passing, and its memory. Throws as `own-memo` does."
   [type own-memo]
   (fn [d]
     (let [m (own-memo d)]
       [(.-data ^Draft d) (passes type (.-data ^Draft d) m) m])))
 
 (defn- make-own-value
-  "The `(own-value v)` of an unsealed `type`: the memory cell of `v`, a value of the class `vc`,
-  which `strategy` holds; refuses anything else, and `v` where `current`, a volatile, holds
-  false."
+  "The `(own-value v)` of an unsealed `type`: the cell of `v`, the atom that holds its memory,
+  as `strategy` reads it from `v`, a value of the class `vc`. Throws `:recognitum/not-a-value`
+  for anything else, and `:recognitum/displaced` where `current`, a volatile, holds false."
   [{:keys [vc type current strategy]}]
   (fn [v]
     (when-not (instance? vc v)
@@ -259,7 +283,9 @@
 
 (defn- make-own-subject
   "The `(own-subject x)` of `type`: what a run reads of `x`, a draft or, where `unsealed?`, a
-  value of `type`, as `[entries passes memory cell]`, the cell the one that holds the memory."
+  value of `type`, as `[data known memory cell]`: its entries, the checks its memory shows
+  passing, its memory, and the cell that holds the memory. Throws as `own-memo` or `own-value`
+  does."
   [{:keys [unsealed? type]} own-value own-memo]
   (fn [x]
     (if unsealed?
@@ -271,9 +297,10 @@
         [data (passes type data m) m (.-cell ^Draft x)]))))
 
 (defn- make-own-for-seal
-  "The `(own-for-seal d)` of `type`: of `d`, a draft of `type`, its entries, what it passes, its
-  memory, whether it passes every check, and a run of the checks left; through the mask where
-  `masks?`."
+  "The `(own-for-seal d)` of `type`: `[data known memory all? run-left]` of `d`, a draft of
+  `type`: its entries, the checks its memory shows passing, its memory, whether those are
+  every check, and, where they are not, a function of a map that runs the checks left. Throws
+  as `own-memo` does."
   [{:keys [masks? type ids hot all-mask run*]} own-memo own-draft run-known]
   (fn [d]
     (if masks?
@@ -288,12 +315,22 @@
         [data known m (empty? (minus ids known)) #(run* % known)]))))
 
 (defn- make-check-group
-  "The `(check-group groups entries)` of `type`. `groups`, each `[picked xs is kind]`: the
-  checks a selection picks in a type, a vector of values, the indices in `xs` of the drafts of
-  the type, or of its values where it is unsealed, ascending, and the kind of run: nil for
-  check's, `:recheck` for recheck's, `:seal` for seal's (check's, with the floor of each
-  value). This type's group comes first; each other type's gate takes its own. Each draft or
-  value is read once, and runs where it has anything to run."
+  "The `(check-group groups entries)` of `type`: the arm that runs a batch's drafts and values
+  of unsealed types, since only a type's own installed write can make them remember. `groups`
+  holds one group per type, this type's first, each `[picked xs is kind]`:
+
+  - `picked`, the checks that the batch's selection picks in the type;
+  - `xs`, the vector of the batch's values and drafts;
+  - `is`, the indices in `xs` of the type's drafts, or of its values where it is unsealed,
+    ascending;
+  - `kind`, the kind of run: nil for `check`'s, `:recheck` for `recheck`'s, or `:seal` for a
+    seal's, which is `check`'s with the floor of each value added (the shape checks of its
+    required fields and of the optional fields it holds).
+
+  `entries` holds the jobs gathered so far, as [[recognitum.record.runs/run-jobs]] takes them.
+  Adds a job for each draft or value of the group that has a check to run, and passes the
+  rest of `groups` to the next type's installed write; the last one runs every job in one
+  call of the engine and returns what `run-jobs` returns. Each draft or value remembers its run."
   [{:keys [masks? unsealed? type ids hot engine all-mask]} closure-of fetching-in own-memo own-subject remember!
    remember-m!]
   (fn [groups entries]
@@ -335,9 +372,9 @@
         (run-jobs (:run-all type) (in-group-order entries))))))
 
 (defn- make-run-checks
-  "The `(run-checks cache-key changes)` of a type without masks: a runner of the readers of the
-  keys of `changes`, kept in `change-runs` under `cache-key`; past 1000, a set not kept is
-  built anew."
+  "The `(run-checks cache-key changes)` of a type without masks: the runner of the readers of
+  the keys of `changes`, kept in `change-runs` under `cache-key` while `change-runs` has
+  room."
   [{:keys [runner engine readers-v]} ^java.util.concurrent.ConcurrentHashMap change-runs]
   (fn [cache-key changes]
     (or (.get change-runs cache-key)
@@ -346,9 +383,9 @@
           r))))
 
 (defn- make-whole-change
-  "The `(whole-change old changes may-lack?)` of a type: a change of a key whose readers read a
-  source runs every check that reads a key changed, on the view of `old` with `changes`
-  applied, and refuses as `refuse!` does."
+  "The `(whole-change old changes may-lack?)` of a type, for a change of a key that has a
+  reader that reads a source: runs the readers of every key of `changes`, through the engine's
+  `run-all`, on the view of `old` with `changes` applied, and throws as `refuse!` does."
   [{:keys [masks? ids hot all-mask readers-m readers-v removed run*]} refuse!]
   (fn [old changes may-lack?]
     (let [view (Changed. old changes removed)]
@@ -361,19 +398,25 @@
                may-lack?))))
 
 (defn- make-change-many
-  "The `(change-many old changes)` of `type`: a change of several keys, or a removal, runs the
-  readers of the keys changed on the view of `old` with `changes` applied, and nothing else;
-  where a key changed has readers that read a source, it is `whole-change`. `key-guards` maps
-  each declared key to its guard, or to `none`; `key-bits`, where a type without masks has
-  one, each declared key to a bit."
+  "The `(change-many old changes)` of `type`, for a change of several keys or a removal.
+  `changes` maps each key changed to its new value, or to `removed` where the change removes
+  it. Throws `:recognitum/undeclared-keys` where `changes` sets a key that `type` does not
+  declare. Else runs the readers of the keys changed, and no other check, on the view of `old`
+  with `changes` applied, and throws as `refuse!` does, the removal of a required field
+  included; where a key changed has a reader that reads a source, calls `whole-change`
+  instead.
+
+  `key-guards` maps each declared key to its guard, or to `none` where its readers read a
+  source. `key-bits` is nil, or, for a type without masks, a map from each declared key to its
+  bit."
   [{:keys [masks? type hot all-mask readers-m readers-v required removed]} ^java.util.IdentityHashMap key-guards
    key-bits refuse! whole-change run-known run-checks]
   (fn [old ^clojure.lang.IPersistentMap changes]
     (let [view (Changed. old changes removed)
           it (.iterator ^Iterable changes)]
       (loop [mask 0, to-run #{}, may-lack? false, sourced? false]
-        ;; `mask` the bits of the readers of the keys changed, with masks; else
-        ;; of the keys changed, with key bits; else `to-run` those readers
+        ;; with masks, `mask` gathers the bits of the readers of the keys changed; with key
+        ;; bits, the bits of the keys changed; else `to-run` gathers the readers
         (if (.hasNext it)
           (let [^java.util.Map$Entry e (.next it)
                 k (.getKey e)
@@ -402,9 +445,10 @@
                      may-lack?)))))))
 
 (defn- make-seal-value
-  "The `(seal-value v picked)` of an unsealed `type`, which seals `v`, a value of `type`, against
-  the checks `picked`: it runs them, what they wait on and the floor, less what `v` passes,
-  remembers the run, and returns `v` or throws."
+  "The `(seal-value v picked)` of an unsealed `type`, which seals `v`, a value of `type`,
+  against the checks `picked`: it runs them, what they wait on and the floor of `v`, less what
+  `v` is known to pass, makes `v` remember the run, and returns `v`. Throws as `own-subject`
+  or `refuse!` does."
   [{:keys [type ids]} own-subject remember! refuse!]
   (fn [v picked]
     (let [[data known m0 cell] (own-subject v)
@@ -417,10 +461,18 @@
       v)))
 
 (defn- make-remember!
-  "The `(remember! cell data m0 known to-run result forget?)` of `type`: a run writes what it
-  found over the memory `m0` it started from, less `forget`, into `cell`. Where another run
-  has written since, it only forgets what failed and `forget`: a pass it found may predate a
-  forget written since. `memo` makes a memory; it is the only part that holds the type's key."
+  "The `(remember! cell data m0 known to-run result forget)` of `type`, `forget` optional:
+  writes into `cell` the memory that a run of the checks `to-run` on `data` leaves. `m0` is
+  the memory the run started from, and `known` the checks `m0` showed passing.
+
+  - Where `cell` still holds `m0`, the new memory shows `known`, less `forget`, plus what
+    passed in `result`, less what failed.
+  - Where another run has written `cell` since, the new memory shows what `cell` shows now,
+    less what failed and less `forget`: a pass this run found may predate a forget that the
+    other run wrote.
+
+  Does nothing where `to-run` and `forget` are both empty. `memo` makes a memory from entries
+  and the checks it shows passing; of these parts, it alone holds the access key."
   [type memo]
   (fn remember!
     ([cell data m0 known to-run result] (remember! cell data m0 known to-run result ()))
@@ -435,10 +487,11 @@
          (swap! cell #(memo data (reduce disj (passes type data %) (concat failed forget)))))))))
 
 (defn- make-remember-m!
-  "The `(remember-m! d m0 km tm result)` of a `type` with masks: [[make-remember!]]'s function
-  for a draft `d`, with nothing more to forget; `km` the mask of the checks known to pass, `tm`
-  of those run. `memo-m` makes a memory from a mask; it is the only part that holds the type's
-  key. `bits-of` and `key-bits-of` give the mask of a collection of ids and of a map's keys."
+  "The `(remember-m! d m0 km tm result)` of a `type` with masks: what [[make-remember!]]'s
+  function does, for a draft `d` and with nothing to forget. `km` is the mask of the checks
+  known to pass, and `tm` the mask of those run. `memo-m` makes a memory from entries and a
+  mask; of these parts, it alone holds the access key. `bits-of` gives the mask of a
+  collection of ids, and `key-bits-of` the mask of a map's keys."
   [{:keys [type bits-of key-bits-of]} memo-m]
   (fn [^Draft d m0 km tm result]
     (let [data (.-data d)
@@ -452,7 +505,7 @@
 
 (defn- make-run-draft
   "The `(run-draft to-run subject forget)` of `type`: runs the checks `to-run` on the entries of
-  `subject`, `[data known m0 cell]` as an own-subject answers it, remembers the run through
+  `subject`, `[data known m0 cell]` as `own-subject` answers it, remembers the run through
   `remember!`, and returns its result."
   [{:keys [type ids]} remember!]
   (fn [to-run [data known m0 cell] forget]
@@ -486,7 +539,8 @@
 
 (defn- make-type
   "The type map of `spec`, as [[compile-type]] compiles it, with the classes `vc` of its values
-  and `dc` of its drafts, an empty gate, whether it is `unsealed?`, and its `Hot`."
+  and `dc` of its drafts, an empty volatile that [[define-type]] sets to the installed write
+  once it installs that write, whether it is `unsealed?`, and its `Hot`."
   [spec strategy define run-all runner vc dc unsealed?]
   (let [t (compile-type spec strategy define run-all runner)]
     ;; an unsealed type's memories never show every check passing through a value of
@@ -507,8 +561,8 @@
   (fn ^long [m] (reduce-kv (fn [^long a id _] (bit-or a (long (bits id)))) 0 m)))
 
 (defn- make-run-of
-  "The `run-of` of `type`: each key of `declared` whose readers, as `readers` maps each key to
-  them, read no source, to a run of those readers alone, by `runner` over `engine`."
+  "The `run-of` of `type`: a map from each key of `declared` whose readers read no source to
+  the runner of those readers alone."
   [{:keys [type declared readers runner engine]}]
   (into {} (for [k declared
                  :let [rs (get readers k #{})]
@@ -516,9 +570,9 @@
              [k (runner engine rs)])))
 
 (defn- make-closure-of
-  "The `(closure-of picked)` of `type`: of a set of checks picked, the closure of its checks of
-  this type, as a set and as a mask or nil, kept in `closures` under `picked`. Past 1000, a set
-  not kept is closed anew."
+  "The `(closure-of picked)` of `type`: `[closed mask]`, the checks of this type among `picked`
+  with every check they wait on, as a set and as a mask (nil without masks). Kept in
+  `closures` under `picked` while `closures` has room."
   [{:keys [type ids hot]} ^java.util.concurrent.ConcurrentHashMap closures]
   (fn [picked]
     (or (.get closures picked)
@@ -533,9 +587,11 @@
   (fn [picked] (filter #(:fetches? ((:by-id type) %)) picked)))
 
 (defn- make-guards
-  "The `guards` of `type`: each key of `run-of`, whose readers read no source, to its guard,
-  made by the guard maker of `spec`: an assoc of the key runs those readers on the old value
-  with the key set, and throws what the change would throw."
+  "The key guards of `type`: a map from each key of `run-of` to its guard, made by the
+  `:guard` of `spec` or, without one, by the guard maker that every such type shares. A key's
+  guard runs the key's readers on the view of the old value with the key set. It throws
+  `:recognitum/displaced` where the type is displaced, and `:recognitum/check-failed` where a
+  reader fails."
   [spec {:keys [type current]} run-of clean?]
   (let [make (or (:guard spec) (guard-maker With))
         refuse (fn [old result]
@@ -553,8 +609,8 @@
     m))
 
 (defn- make-key-bits
-  "The `key-bits` of a type: for a type without masks, an IdentityHashMap from each key of
-  `declared` to a bit of a long, where it declares at most 64; else nil."
+  "The `key-bits` of a type: for a type without masks that declares at most 64 keys, an
+  IdentityHashMap from each key of `declared` to a bit of a `long`; else nil."
   [{:keys [masks? declared]}]
   (when (and (not masks?) (<= (count declared) 64))
     (let [m (java.util.IdentityHashMap.)]
@@ -562,9 +618,11 @@
       m)))
 
 (defn- make-carry
-  "The `(carry old changes)` of an unsealed `type`: the memory cell of the value a change of
-  `old` makes, `old` refused as `own-value` refuses it, and `changes` as an undeclared key
-  refuses them. The new value remembers what `old` remembered, and the keys the change writes."
+  "The carry of an unsealed `type`: `(carry old changes)` returns a new cell for the value that
+  a change of `old` makes. Its memory is `old`'s, with the keys of `changes` added to the keys
+  written, so that the new value forgets the checks that read them. Throws as `own-value` does
+  for `old`, and `:recognitum/undeclared-keys` where `changes` holds a key that `type` does not
+  declare."
   [type own-value]
   (fn [old changes]
     (let [cell (own-value old)]
@@ -577,9 +635,10 @@
                 mo))))))
 
 (defn- parts-of
-  "What the builders of a type's functions read: `type`, the type map; `strategy`, `runner`,
-  the class `vc` of its values, whether it is `unsealed?`, and `current`, as [[define-type]]
-  has them; and what they read of the type map and its `Hot`, each under the name of its key."
+  "The parts of a type: the map that the `make-*` builders of its functions destructure. It
+  holds `:type`, the type map; `:strategy`, `:runner`, `:vc` (the class of its values),
+  `:unsealed?` and `:current`, as [[define-type]] has them; and what the builders read of the
+  type map and of its `Hot`, such as `:ids`, `:masks?` and `:readers`."
   [type strategy runner vc unsealed? current]
   (let [ids (:ids type)
         ^Hot hot (::hot type)
@@ -606,10 +665,11 @@
      :removed removed :fetching-m fetching-m :readers-m readers-m}))
 
 (defn- make-construct
-  "The `(construct x y)` of `type`: a value of the entries `x`, for the constructor `y`. It
-  refuses where `current`, a volatile, holds false, and where `x` has a key `declared?` denies.
-  Where `unsealed?`, `build` makes the value of the entries; else every check runs through
-  `run*`, and `seal!` seals the entries with the result."
+  "The `(construct x y)` of `type`: a value of the entries of the map `x`. Throws
+  `:recognitum/displaced-constructor`, with the remedy `y` as its advice, where `current`, a
+  volatile, holds false, and `:recognitum/undeclared-keys` where `x` has a key that
+  `declared?` denies. Where `unsealed?`, `build` makes the value, and no check runs; else
+  every check runs through `run*`, and `seal!` seals the entries or throws."
   [{:keys [type current declared? unsealed? run*]} build seal!]
   (fn [x y]
     (let [data (proof/plain-map x)]
@@ -622,12 +682,15 @@
 
 (defn- make-seal
   "The `(seal x y)` of `type`. Where `unsealed?`, `seal-value` of the value `x` against the
-  checks `y`. Else the seal of the draft `x`, as `own-for-seal` reads it: it refuses where
-  `current`, a volatile, holds false, and where the draft has a key `declared?` denies, then
-  runs the checks the draft is not known to pass. Where one fails or a required field is
-  absent (`clean?`, `lacks?`), it remembers the run through `remember!` and throws; else it
-  returns the draft's entries sealed by `seal-data`, and the draft remembers that every check
-  passes."
+  checks `y`. Else the seal of the draft `x`, as `own-for-seal` reads it:
+
+  - it throws `:recognitum/displaced-constructor` where `current`, a volatile, holds false,
+    and `:recognitum/undeclared-keys` where the draft has a key that `declared?` denies;
+  - it runs the checks the draft is not known to pass;
+  - where one fails or a required field is absent (`clean?`, `lacks?`), the draft remembers
+    the run through `remember!`, and the seal throws `:recognitum/check-failed`;
+  - else it returns the draft's entries sealed by `seal-data`, and the draft remembers that
+    every check passes."
   [{:keys [unsealed? type ids all-mask current declared?]} clean? lacks? remember! own-for-seal seal-value seal-data]
   (fn [x y]
     (if unsealed?
@@ -650,8 +713,9 @@
               v)))))))
 
 (defn- make-draft-of
-  "The `(draft-of x)` of `type`: a draft of `x`, a value of the class `vc`, whose memory shows
-  every check passing through `x`. Refuses where `unsealed?`, and refuses anything else."
+  "The `(draft-of x)` of `type`: a draft of `x`, a value of the class `vc`, whose memory has `x`
+  as its proof and so shows every check passing. Throws `:recognitum/no-drafts` where
+  `unsealed?`, and `:recognitum/not-a-value` for anything but a value of `vc`."
   [{:keys [unsealed? type vc ids all-mask]}]
   (fn [x]
     (cond unsealed? (throw (no-drafts (:name type)))
@@ -659,8 +723,9 @@
           :else (throw (ex-info (str "not a value of " (:name type)) {:error :recognitum/not-a-value})))))
 
 (defn- make-rewrite
-  "The `(rewrite x y)` of a type: the draft `x` with the entries `y`, or `x` itself where they
-  change nothing. Refuses what `own-draft` refuses."
+  "The `(rewrite x y)` of a type: the draft `x` with its entries replaced by those of the map
+  `y`, forgetting the checks that read a key that changed; `x` itself where nothing changed.
+  Throws as `own-draft` does."
   [own-draft]
   (fn [x y]
     (let [[data] (own-draft x)
@@ -672,7 +737,8 @@
 
 (defn- make-clean-draft
   "The `(clean-draft x)` of `type`: the draft `x` without the keys `type` does not declare, or
-  `x` itself where it has none. Refuses where `unsealed?`, and what `own-draft` refuses."
+  `x` itself where it has none. Throws `:recognitum/no-drafts` where `unsealed?`, and else as
+  `own-draft` does."
   [{:keys [unsealed? type]} own-draft]
   (fn [x]
     (let [_ (when unsealed? (throw (no-drafts (:name type))))
@@ -683,9 +749,9 @@
         (rewritten x kept #(into % (remove (:keys type)) (keys data)) 0)))))
 
 (defn- make-check
-  "The `(check x y)` of `type`: on `x`, a draft or, where the type is unsealed, a value, as
-  `own-subject` reads it, runs the checks of `type` that `y` names and what they wait on, less
-  those `x` is known to pass, through `run-draft`, and returns the run's result."
+  "The `(check x y)` of `type`, where `x` is a draft or, where the type is unsealed, a value:
+  runs on `x`, through `run-draft`, the checks of `type` that `y` names and the checks they
+  wait on, less those `x` is known to pass. `x` remembers the run. Returns the run's result."
   [{:keys [type ids]} own-subject run-draft]
   (fn [x y]
     (let [[_ known :as own] (own-subject x)
@@ -700,7 +766,6 @@
   (fn [x y]
     (let [[_ known :as own] (own-subject x)
           named (set/intersection ids (set y))]
-      ;; a named check that reads a source is forgotten, then remembered only if this run passes it
       (run-draft (into named (set/difference (select/closure type named) known)) own
                  (fetching-in named)))))
 
@@ -714,47 +779,56 @@
       (Draft. {} (atom nothing) nil 0))))
 
 (defn- displace-predecessor!
-  "Where `spec` names its type, makes `type` the definition of that name, as [[succeed!]] does,
-  and displaces the definition it succeeds, if any."
+  "Where `spec` names its type, records `type` as the latest definition of that name, as
+  [[succeed!]] does, and displaces the definition it replaces, if any."
   [spec type]
   (when-let [n (:name spec)]
     (when-let [displaced (succeed! n type)]
       ((gate displaced) ::displace nil nil))))
 
 (defn define-type
-  "Defines a type and returns it, a map describing it that holds no key. `spec`:
+  "Defines a type and returns its type map, which holds no access key. `spec`:
 
   - `:name`, a qualified symbol, which also names the type's class;
   - `:fields`, each `{:key :sym :optional?}`;
   - `:checks`, each `{:id :waits :run}` and optionally `:concerns`, `:doc`, `:reads` (the keys it
-    reads), `:sources` (the sources it reads, compared with `=` by `fetching`), `:fetches?`,
-    `:shape-of` (the key of the field it is the shape check of) and `:gate` (a key: where it
-    is absent, the check passes without running). `:run` is a compiled check of the engine.
-    A check waits on the checks in its `:waits` and on the shape check of each key it reads,
-    as [[waits-of]] says. The shape check of an optional field passes where its field is
-    absent;
-  - `:interfaces`, the interfaces every sealed value implements (a protocol's among them), and
-    `:methods`, a map from each method's signature, as the proof strategy's definition takes
-    it, to a fn of `current` and `refuse` that returns the method's function. That function
-    takes the value first and calls `refuse` with it where `current`, a volatile, holds false.
-    `toString` is given a `current` that always holds true;
-  - optionally `:guard`, what [[guard-maker]]'s form evaluates to where the definition placed
-    it; without one, the guards are made by the form placed here, which every such type
-    shares; and optionally `:change`, what [[change-guard-maker]]'s form evaluates to, in the
-    same way;
-  - optionally `:instead`, a string: what a caller should do in place of calling the type's
-    class's constructor, whose refusal, without the key, closes with it.
+    reads), `:sources` (the sources it reads, compared with `=` by the selection
+    [[recognitum.select/fetching]]), `:fetches?`, `:shape-of` (the key of the field it is the
+    shape check of) and `:gate` (a key: where it is absent, the check passes without running).
+    `:run` is a compiled check of the engine. A check waits on the checks in its `:waits` and
+    on the shape check of each key it reads, as [[waits-of]] says. The shape check of an
+    optional field passes where its field is absent;
+  - `:interfaces`, the interfaces every value of the type implements (a protocol's among
+    them), and `:methods`, a map from each method's signature, as the proof strategy's
+    definition takes it, to a fn of `current` and `refuse` that returns the method's function.
+    That function takes the value first and calls `refuse` with it where `current`, a
+    volatile, holds false. `toString` of no parameters is given a `current` that always holds
+    true;
+  - optionally `:unsealed true`, for a type as `rec/defproven-in` defines one: its values are
+    made and written with no check run and remember what passed, and the type has no drafts;
+  - optionally `:guard`, the value of a [[recognitum.record.views/guard-maker]] form that the
+    definition's expansion holds, and `:change`, the value of a
+    [[recognitum.record.views/change-guard-maker]] form there. Without them, the type uses the
+    makers compiled in this namespace, which every such type shares;
+  - optionally `:instead`, a string that closes the message the class's constructor throws
+    when code without the access key calls it: what to call instead.
 
   `wiring` names the proof `:strategy` and the engine's `:define`, `:run-all` and `:runner`,
-  which runs the checks that read no source on the calling thread. Defining a
-  type under a name already defined is redefinition: the definition of that name current
-  before it is displaced, whatever the name's namespace maps the name to now, or whether the
-  namespace was removed. Its values stay values of their class and are no longer
-  proven: a write that changes one, and every method but `toString` called with one, throws
-  the refusal `:recognitum/displaced`. [[draft]] of one gives a draft of the type's current
-  definition. [[make]] with the displaced definition, and [[seal]] of a draft of its class,
-  throw the refusal `:recognitum/displaced-constructor`, so a constructor or a class held from
-  before makes nothing."
+  which runs the checks that read no source on the calling thread.
+
+  Defining a type under a name that already names a type is a redefinition: the definition
+  of that name current before it is displaced, whatever the name's namespace maps the name to
+  now, and even where that namespace was removed. Its values stay instances of their class
+  and are no longer sealed:
+
+  - a write that changes one, and every method but `toString` called with one, throws
+    `:recognitum/displaced`;
+  - [[recognitum.record.values/draft]] of one gives a draft of the type's current
+    definition, where the name still names one;
+  - [[recognitum.record.values/make]] with the displaced type map, and
+    [[recognitum.record.values/seal]] of a draft of its class, throw
+    `:recognitum/displaced-constructor`, so a constructor or a class held from before makes
+    nothing."
   [spec {:keys [strategy define run-all runner]}]
   (let [current (volatile! true)
         unsealed? (true? (:unsealed spec))
@@ -771,7 +845,7 @@
                        mask (mask-of hot ids)]
                    (proof/mark! h m (PassKey. data ids mask))
                    (Memo. type data ids #{} m mask))))
-        ;; [[memo]] of the checks of `mask`, for a type with masks
+        ;; `memo` of the checks of `mask`, for a type with masks
         memo-m (fn [data ^long mask]
                  (if (zero? mask)
                    nothing
@@ -783,7 +857,8 @@
         clean (volatile! nil)
         clean? (make-clean? clean)
         refuse! (make-refuse! type clean?)
-        ;; `result`, the run of the checks on `data`, sealed
+        ;; `data` sealed, where `result`, the run of every check on it, is clean and, where
+        ;; `may-lack?`, no required field is absent; else throws as `refuse!` does
         seal! (fn [data result may-lack?]
                 (if (and (clean? result) (not (and may-lack? (lacks? data))))
                   (proof/seal h data)
@@ -795,8 +870,8 @@
         own-draft (make-own-draft type own-memo)
         own-value (make-own-value parts)
         own-subject (make-own-subject parts own-value own-memo)
-        ;; each mask of passing checks asked for, to a run of the checks it leaves: the runner
-        ;; over those checks where none reads a source, else every check but the known
+        ;; each mask of known checks, to the runner of the checks it leaves, where none of those
+        ;; reads a source
         runs (java.util.concurrent.ConcurrentHashMap.)
         run-known (make-run-known parts runs)
         own-for-seal (make-own-for-seal parts own-memo own-draft run-known)
@@ -810,14 +885,15 @@
         guards (make-guards spec parts run-of clean?)
         key-guards (make-key-guards parts guards)
         key-bits (make-key-bits parts)
-        ;; for a type without masks: each set of keys a change of several keys changes, where no
-        ;; check of theirs reads a source, as their `key-bits` or else as the set of the checks
-        ;; that read them, to a runner of those checks. Past 1000, a set not kept is built anew.
+        ;; for a type without masks: the keys that a change of several keys changes, as their
+        ;; `key-bits` mask or else as the set of their readers, to the runner of those readers,
+        ;; where none of them reads a source
         change-runs (java.util.concurrent.ConcurrentHashMap.)
         run-checks (make-run-checks parts change-runs)
         whole-change (make-whole-change parts refuse!)
         change-many (make-change-many parts key-guards key-bits refuse! whole-change run-known run-checks)
-        ;; the change guard, `(cg old changes)`: a change that sets one key goes to that key's guard
+        ;; the change guard, `(cg old changes)`: a change that sets one key goes to that key's
+        ;; guard, and any other to `change-many` or `whole-change`
         change-guard ((or (:change spec) (change-guard-maker)) own! key-guards removed none change-many whole-change)
         ;; `(write old entries)`, which only `installed` calls: the change guard of what
         ;; `entries` changes, then `entries` sealed
@@ -828,8 +904,6 @@
                     old
                     (do (change-guard old (into {} (map (fn [k] [k (get entries k removed)])) changed))
                         (proof/seal h (with-meta-of entries old))))))
-        ;; the seal of `v`, a value of this unsealed type, against the checks `picked`: runs them,
-        ;; what they wait on and the floor, less what `v` passes, and returns `v` or throws
         seal-value (make-seal-value parts own-subject remember! refuse!)
         ;; a value of this unsealed type, of the entries `data`
         build (fn [data] (proof/build h data (atom nothing)))
@@ -843,8 +917,9 @@
         check (make-check parts own-subject run-draft)
         recheck (make-recheck parts own-subject run-draft fetching-in)
         open (make-open parts nothing)
-        ;; the installed write. Its three-argument arity, which the class's channel reaches, serves
-        ;; both kinds of type; an unsealed type's strategy calls no other arity.
+        ;; the installed write. Its three-argument arity, which `installed` and each class's
+        ;; `gate()` reach without the access key, holds the arms and serves both kinds of type;
+        ;; an unsealed type's strategy calls no other arity.
         write-all (fn
                     ([old entries] (write old entries))
                     ;; the change guard takes every change of one key, so this arity is never called
@@ -866,8 +941,8 @@
                        ::displace (do (vreset! current false) nil)
                        ::recheck (recheck x y))))]
     (if unsealed?
-      ;; each change of a value carries its memory: the new value remembers what the old one
-      ;; remembered, and the keys the change writes
+      ;; each change of a value calls the carry, which gives the new value the old value's
+      ;; memory, with the keys the change writes added to the keys written
       (proof/install-carry!
        h
        write-all

@@ -1,11 +1,16 @@
 (ns recognitum.record.types
-  "The type a value, a draft or a class belongs to, and how values and drafts print.
-  [[type-of]] answers the type of a value class, a sealed value, a draft or a type itself;
-  [[type-of!]] refuses anything else, and [[value-type!]] a type given where a value belongs.
-  [[gate]] answers a type's installed write, [[current?]] whether no later definition displaced
-  a type, [[named-now]] the type a name maps to, and [[current-types]] every current type. A value
-  prints as its tagged literal, and a draft as `#recognitum/draft [T {...}]`. Hidden: the answer
-  each class keeps of its type, and the print-method entries."
+  "The type that a value, a draft or a class belongs to, whether a definition is current, and
+  how values and drafts print.
+
+  - [[type-of]], [[type-of!]], [[type-of-class]] and [[value-type!]] find a type;
+  - [[gate]] answers a type's installed write, through which the layer acts on its values;
+  - [[current?]], [[named-now]] and [[current-types]] answer which definitions are current;
+  - [[refuse-type!]] refuses a type given where a value belongs, and [[refuse-unnamed!]] a
+    selection holding a keyword that names nothing.
+
+  A value of any type, current or displaced, prints as its tagged literal, `#ns/T {...}`, and
+  a draft as `#recognitum/draft [ns/T {...}]`. Hidden: the type each class keeps once it
+  answers it, and the print-method entries."
   (:require
    [recognitum.proof :as proof]
    [recognitum.record.draft :refer [draft? marks-of]]
@@ -25,15 +30,16 @@
         t))))
 
 (defonce ^:private class-types
-  ;; each class, to a volatile holding the type its class answers once it answers one: a
-  ;; class's answer never changes once given, and nil may yet become a type
+  ;; each class, to a volatile that holds the type the class answers, once it answers one. A
+  ;; class's answer never changes once given; nil is not kept, since a class answers nil until
+  ;; its type's write is installed
   (proxy [java.lang.ClassValue] []
     (computeValue [_] (volatile! nil))))
 
 (defn type-of-class
-  "The type whose value class or draft class is `c`, as the class itself answers, or nil. The
-  answer is kept on the class once given, so it leaves nothing behind that would keep the
-  class loaded."
+  "The type whose value class or draft class is `c`, as the class itself answers, or nil. Once
+  given, the answer is kept on the class itself, through a `ClassValue`, so that nothing
+  outside the class holds it and keeps the class loaded."
   [^Class c]
   (let [held (.get ^java.lang.ClassValue class-types c)]
     (or @held
@@ -41,8 +47,8 @@
           (vreset! held t)))))
 
 (defn- draft-type
-  "The type of a draft's memory `mo`, where that type's own gate answers it, or nil: a memory
-  built by hand around a type map that no definition made names no type."
+  "The type of a draft's memory `mo`, where that type's own installed write answers it, or
+  nil: a memory built by hand around a type map that no definition made belongs to no type."
   [mo]
   (when (instance? Memo mo)
     (let [t (.-type ^Memo mo)
@@ -52,8 +58,9 @@
           (when (identical? t (g :recognitum.record/type nil nil)) t))))))
 
 (defn type-of
-  "The type `x` belongs to: a type's value class, a sealed value, a draft, or a type itself.
-  Nil for anything else."
+  "The type that `x` belongs to, where `x` is a value of a type (sealed or not, current or
+  displaced), a draft, a type's value class or draft class, or a type map itself. Nil for
+  anything else."
   [x]
   (cond (class? x)  (type-of-class x)
         (draft? x)  (draft-type (marks-of x))
@@ -62,28 +69,34 @@
         (nil? x)    nil
         :else       (type-of-class (class x))))
 
-(defn type-of! [x]
+(defn type-of!
+  "[[type-of]] of `x`; throws `:recognitum/not-a-type` where `x` belongs to no type."
+  [x]
   (or (type-of x)
       (throw (ex-info (str "not a value, a draft or a class of a recognitum type: " (pr-str x))
                       {:error :recognitum/not-a-type :value x}))))
 
 (defn refuse-type!
-  "Refuses `x` where `x` is `t`'s class or `t` itself, a type given where a value belongs."
+  "Throws `:recognitum/not-a-value` where `x` is a class or is the type map `t` itself: a type
+  given where a value belongs."
   [x t]
   (when (or (class? x) (identical? x t))
     (throw (ex-info (str "a type was given where a value belongs: " (:name t))
                     {:error :recognitum/not-a-value :type (:name t)}))))
 
 (defn value-type!
-  "The type of `x`, a value or a draft; refuses anything else, a type included."
+  "The type of `x`, a value or a draft. Throws as [[type-of!]] and [[refuse-type!]] do for
+  anything else, a type's class or type map included."
   [x]
   (let [t (type-of! x)]
     (refuse-type! x t)
     t))
 
 (defn gate
-  "The type's installed write. Each arity runs the checks it stands for. [[define-type]] keeps
-  it in the type once installed; a type without it asks the strategy."
+  "The installed write of `type`, through which code without the access key makes, drafts,
+  seals and checks the type's values. Called with an operation keyword and two
+  arguments, it runs that operation. Read from the type map where the definition has set it
+  there, else asked of the type's strategy."
   [type]
   (or (when-let [g (:recognitum.record/gate type)] (.deref ^clojure.lang.Volatile g))
       (proof/installed (:strategy type) (:recognitum.record/class type))))
@@ -94,8 +107,8 @@
   ((gate type) :recognitum.record/current? nil nil))
 
 (defn named-now
-  "The type that the namespace of type name `n` maps its name to, if it is a definition of
-  `n`, current or not."
+  "The type whose class the namespace of type name `n` maps `n`'s name to, where that class
+  belongs to a definition of `n`, current or not; else nil."
   [n]
   (let [c (some-> (find-ns (symbol (namespace n))) (.getMapping (symbol (name n))))]
     (when (class? c)
@@ -103,7 +116,8 @@
         (when (= n (:name t)) t)))))
 
 (defn- types-in
-  "The current types that namespace `n` defines: each its namespace maps its name to."
+  "The current types whose classes namespace `n` imports under their names, each a type that
+  `n` defines."
   [n]
   (for [[s c] (ns-imports n)
         :let [t (type-of-class c)]
@@ -117,9 +131,8 @@
   (into {} (for [n (all-ns), t (types-in n)] [(:name t) t])))
 
 (defn refuse-unnamed!
-  "Refuses selection `sel` where a keyword in it names no concern or bundle check (see
-  [[recognitum.select/named]]) and no check of a current type of the keyword's namespace.
-  Returns `sel`."
+  "Returns selection `sel`. Throws `:recognitum/unknown-name` where a keyword in `sel` names no
+  concern, no bundle check and no check of a current type of the keyword's namespace."
   [sel]
   (doseq [k (select/keywords sel)]
     (when-not (or (select/named k)

@@ -15,8 +15,9 @@
       (if (= more acc) acc (recur more)))))
 
 (defn pulled-back
-  "For each failed or blocked check that an `except` in `sel` removed but a wait pulled back
-  in: the checks that wait on it, and why it ran."
+  "A map from each check of `ids` that an `except` in `sel` removed, but that ran because a
+  check of `to-run` waits on it, to `{:waited-on-by ws :hint h}`: `ws`, the checks of `to-run`
+  that wait on it, and `h`, a message that says why it ran."
   [type sel picked to-run ids]
   (let [ex (select/excepted type sel)]
     (into {} (for [id ids
@@ -30,7 +31,9 @@
 
 (defn report
   "The report of a run: nil where nothing failed or was blocked, else `{:failed :blocked}`, each
-  failed check's entry holding its failure `:data`, its `:doc`, and the checks it `:blocked`."
+  failed check's entry holding its failure `:data`, its `:doc` where it has one, and the
+  checks it `:blocked`. `pull`, where given, is a function of the ids that failed or were
+  blocked, and its answer, where not empty, goes under `:pulled-back`."
   ([type result] (report type result nil))
   ([type {:keys [failed blocked]} pull]
    (when (or (seq failed) (seq blocked))
@@ -114,8 +117,9 @@
              {:error :recognitum/displaced-constructor :type tname})))
 
 (defn check-failed
-  "The failure of a seal, a constructor or a write of `type`: the report `rep` of the checks that
-  failed, or none, and under `:missing` the required fields `absent`, where any is."
+  "The ex-info of the `:recognitum/check-failed` failure of a seal, a constructor or a write of
+  `type`. Its data is the report `rep` (an empty report where `rep` is nil), with the required
+  fields `absent` under `:missing` where any is, and `:error` and `:type`."
   ([type rep] (check-failed type rep nil))
   ([type rep absent]
    (let [rep (cond-> (or rep {:failed {} :blocked #{}})
@@ -124,8 +128,8 @@
               (assoc rep :error :recognitum/check-failed :type (:name type))))))
 
 (defn refuse-undeclared!
-  "Refuses the keys of `ks` that `type` does not declare; where `data` is given, only those
-  `data` holds."
+  "Throws `:recognitum/undeclared-keys` where a key of `ks` is one that `type` does not
+  declare; where `data` is given, only such a key that `data` holds counts."
   ([type ks] (refuse-undeclared! type ks nil))
   ([type ks data]
    (let [declared (:keys type)
@@ -142,8 +146,8 @@
   (reduce-kv (fn [_ k _] (if (declared? k) true (reduced false))) true m))
 
 (defn member-of
-  "A predicate of whether `x` is in the set `xs`. Where `xs` holds a few keywords, which are
-  interned, it compares by identity, without hashing."
+  "A predicate that answers whether its argument is in the set `xs`. Where `xs` holds a few
+  keywords, it compares by identity, which keywords allow because they are interned."
   [xs]
   (if (and (<= (count xs) 16) (every? keyword? xs))
     (let [^objects a (object-array xs)
@@ -163,8 +167,9 @@
   {:failed {} :blocked #{}})
 
 (defn answer
-  "What a run of `sel` answers: true, or the report of `result`, with the required fields
-  `absent` under `:missing` where any is."
+  "What a run of `sel` answers: true, or the report of `result`. Where `absent`, the required
+  fields that the value lacks, is not nil, it goes under `:missing`, and the answer is a
+  report even where nothing failed."
   ([type result sel picked to-run] (answer type result sel picked to-run nil))
   ([type result sel picked to-run absent]
    (let [r (report type result #(pulled-back type sel picked to-run %))]

@@ -1,10 +1,15 @@
 (ns recognitum.define.methods
-  "The sections of methods of a definition: what a section's head names ([[protocol-var]],
-  [[interface-named]], [[class-named]], or why it heads no section, [[head-refusal]]), the
-  methods of a protocol's section ([[parse-protocol]]) and of an interface's
-  ([[parse-interface]]), the function each method compiles to ([[method-fn]]), and the
-  refusals of a section or a method written twice ([[check-method-sections!]],
-  [[check-methods!]]) and of a definition the proof strategy refuses ([[refuse-definition!]]).
+  "The sections of methods of a definition:
+
+  - what a section's head names: [[protocol-var]], [[interface-named]], [[class-named]], or why
+    it heads no section, [[head-refusal]];
+  - the methods of a protocol's section, [[parse-protocol]], and of an interface's,
+    [[parse-interface]];
+  - the function that each method compiles to: [[method-fn]];
+  - the refusals of a section or a method written twice, [[check-method-sections!]] and
+    [[check-methods!]], and of a definition that the proof strategy refuses,
+    [[refuse-definition!]].
+
   Each function returns data or a form, or throws the refusal of the definition. Hidden: the
   type hints and primitives of an interface's methods, and how a protocol's methods are read."
   (:require
@@ -13,7 +18,7 @@
    [recognitum.define.clauses :refer [resolve-var words]]))
 
 (defn protocol-var
-  "The var `s` resolves to, where it holds a protocol."
+  "The var that `s` resolves to, where that var holds a protocol; else nil."
   [s]
   (when-let [v (resolve-var s)] (let [x @v] (when (and (map? x) (:on-interface x)) v))))
 
@@ -87,11 +92,15 @@
   (str (.getName m) "(" (str/join ", " (map #(.getName ^Class %) (.getParameterTypes m))) ")"))
 
 (defn parse-interface
-  "An interface section's methods, each with the parameter types of the one method of the
-  interface it implements. Of `Object`, only `toString`. Refuses a method the interface does not
-  declare, an arity it does not declare, a method that more than one of the interface's methods
-  match after the hints on its parameters, and `equals` and `hashCode`, since a value's equality
-  and hash are its map's."
+  "An interface section's methods, each with the signature of the one method of the interface
+  that it implements. Of the methods of `Object`, a section headed by `Object` may give only
+  `toString`. Refuses:
+
+  - a method that the interface does not declare, and an arity that it does not declare;
+  - `equals` and `hashCode`, since a value's equality and hash are its map's;
+  - a hint on a parameter that names no class;
+  - a method that, after the hints on its parameters, matches none of the interface's methods,
+    or more than one."
   [ctx {:keys [^Class class marker methods]}]
   (for [m methods
         :let [{:keys [name params line] :as impl} (parse-method ctx marker m)
@@ -130,10 +139,12 @@
                       (words (map show-method found)))))))
 
 (defn refuse-definition!
-  "Throws the proof strategy's refusal `r` of the definition of `tname` with `methods`, located
-  at the method it names. A method a value has as a map is refused with its remedies: a
-  protocol's is renamed, or extended to the type after the definition; an interface's is left
-  out, since the map's method answers it."
+  "Throws the proof strategy's refusal of the definition of `tname`, a map
+  `{:kind :message :method}`, located at the method of `methods` that `:method` names. Where
+  `:kind` is `:map-method`, the method is one that a value already has as a map, and the message
+  gives the remedies: a protocol's method is renamed, or extended to the type after the
+  definition; an interface's method is left out, since the map's method answers it. Otherwise
+  the message is the strategy's `:message`."
   [ctx tname methods {:keys [kind message method]}]
   (let [[mname arity] method
         impl (when method
@@ -151,7 +162,7 @@
                  message))))
 
 (defn- hints-own-class
-  "A form in `forms` that a type hint names the type `tname` on, or nil."
+  "A form in `forms` whose type hint names the type `tname` or its class `classname`, or nil."
   [tname classname forms]
   (first (for [f (tree-seq coll? seq forms)
                :let [tag (:tag (meta f))]
@@ -160,11 +171,15 @@
 
 (defn method-fn
   "The form of a fn of `current` and `refuse`, as `recognitum.record/define-type` takes a
-  method, returning the fn that implements the method: called with the value first, it calls
-  `refuse` with the value where `current` holds false, and else runs the body, the fields bound
-  to its entries (nil where absent), the value to the first parameter, and the type's name to
-  the value's class. `recur` goes to the method's head with the parameters after the first, as
-  in `defrecord`."
+  method. That fn returns the fn that implements the method, which is called with the value
+  first:
+
+  - where `@current` is false or nil, it returns what `refuse` returns given the value;
+  - else it runs the body with each field bound to its entry in the value (nil where absent),
+    the first parameter bound to the value, and the type's name bound to the value's class.
+
+  `recur` in the body goes to the method's head with the parameters after the first, as in
+  `defrecord`."
   [tname fields key-of {:keys [params body]}]
   (let [[self & args] params
         v (gensym "value")
@@ -192,8 +207,8 @@
                  (str "interface " (:marker s) " is listed twice")))))
 
 (defn check-methods!
-  "Refuses a method written twice with one signature, and a method that hints `tname`, whose
-  class `classname` does not exist while the methods compile."
+  "Refuses a method written twice with one signature, and a method that hints `tname` or
+  `classname`: the type's class does not exist while the methods compile."
   [ctx tname classname methods]
   (doseq [[sig c] (frequencies (map :sig methods)) :when (> c 1)
           :let [{:keys [name marker params line]} (some #(when (= sig (:sig %)) %) methods)

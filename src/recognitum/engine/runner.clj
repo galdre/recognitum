@@ -1,10 +1,13 @@
 (ns recognitum.engine.runner
-  "A runner: [[runner]] makes a function that runs some checks of an engine on one value at a
-  time, on the calling thread, for checks whose bodies read no source, and answers what a run
-  in waves of that value answers. [[one-run]] is the run of one check alone, which
-  `recognitum.engine/body-form` compiles into each check; the functions its expansion calls are
-  public for that reason. Hidden: which of its three cases a runner takes (no check, one check,
-  several)."
+  "Runners. A runner is a function that runs some checks of an engine on one value at a time,
+  on the calling thread, and answers what a run in waves of that value answers. It is for
+  checks whose bodies read no source.
+
+  - [[runner]] makes a runner.
+  - [[one-run]] is the run of one check alone, which `recognitum.engine/body-form` compiles
+    into each check. The functions that its expansion calls are public for that reason.
+
+  Hidden: which of three cases a runner takes (no check, one check, several)."
   (:require
    [recognitum.engine.runtime :as rt]
    [recognitum.engine.step :refer [failure-of nothing-failed step]])
@@ -16,7 +19,7 @@
 ;;; ------------------------------------------------------------- a runner
 
 (defn- reads-source
-  "The refusal of a runner's call in which check `id` reached a read of a source."
+  "The ex-info that a runner throws where check `id` reaches a read of a source."
   [id]
   (ex-info (str "check " id " reads a source, and a runner calls none")
            {:error :recognitum.checks/reads-source :reads-source id}))
@@ -31,13 +34,16 @@
   nothing-failed)
 
 (defn caught
-  "A runner's failure for a signal `e` that a body let escape. Rethrows anything else."
+  "The `Failed` for `e`, an exception that a body let escape, where `e` is a signal: the
+  exception that a read of an absent field or a failed read of a source throws. Rethrows any
+  other exception."
   [^Exception e]
   (if-let [d (failure-of e)] (Failed. d) (throw e)))
 
 (defn answer-one
-  "A runner's answer for check `id`, whose body ended in `r` and not in `true`. `home` is the
-  binding frame from before the body ran."
+  "A runner's answer for check `id`, whose body ended in `r` and not in `true`. Where `r` is a
+  Park, restores `home`, the binding frame from before the body ran, unless it is nil, and
+  throws the ex-info of [[reads-source]]."
   [id r home]
   (cond
     (instance? Park r)   (do (when home (Var/resetThreadBindingFrame home))
@@ -46,9 +52,9 @@
     :else                {:failed {id r} :blocked #{}}))
 
 (defmacro one-run
-  "The run of `check`, whose id is `id`, alone on `value`, as a runner of it answers. Where
-  `reads?` is false, the check's body holds no read of a source, so it cannot park and
-  nothing restores the binding frame."
+  "The run of `check`, whose id is `id`, alone on `value`: what a runner of that one check
+  answers. `reads?` is false only where the check's body holds no read of a source; such a
+  body cannot park, so the expansion does not restore the binding frame."
   [check id value assumed reads?]
   `(if (and (some? ~assumed) (assumed? ~assumed ~id))
      passed
@@ -62,8 +68,9 @@
 (defn runner
   "A function of a value and a set of assumed ids that runs the checks of `engine` that `ids`
   names, for checks whose bodies read no source. `((runner engine ids) value assumed)` answers
-  what `(first (run-all [[engine value assumed']]))` answers, `assumed'` being `assumed` with
-  every check `ids` does not name: a check outside `ids` counts as passed and does not run.
+  what `(first (run-all [[engine value assumed']]))` answers, where `assumed'` is `assumed` plus
+  every check that `ids` does not name: a check outside `ids` counts as passed and does not
+  run.
 
   The checks run one after another on the calling thread, in wait order, each to its end. A
   call calls no source: a check that reaches `&fetch` or `&fetch-each` stops at that read,
@@ -82,8 +89,8 @@
     (cond
       (zero? n)
       (fn [_ _] nothing-failed)
-      ;; one check that waits on none named: no array and no loop, and the run its body
-      ;; compiled where it has one
+      ;; one check that waits on no named check: the run that body-form compiled into it,
+      ;; where it has one
       (and (== n 1) (zero? (alength ^ints (aget waits 0))))
       (let [id (aget ids 0)
             f (aget fns 0)]
@@ -94,7 +101,7 @@
       (fn [value assumed]
         (let [assumed (if (or (nil? assumed) (set? assumed)) assumed (set assumed))
               assumed? (and (some? assumed) (pos? (count assumed)))
-              ;; true where the check failed or was blocked
+              ;; (aget bad i): check i failed or was blocked
               bad (boolean-array n)
               home (Var/getThreadBindingFrame)]
           (loop [i 0, failed nil, blocked nil]

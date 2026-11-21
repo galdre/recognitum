@@ -1,22 +1,27 @@
 (ns recognitum.record.values
-  "A value or a draft of any type, through its type's installed write: [[make]], [[draft]],
-  [[clean]] and [[seal]], and what a value is known to pass: [[sealed?]], [[proves?]],
-  [[proven-checks]], [[proven-concerns]], [[checks-of]] and [[selects-nothing?]]. Hidden: which
-  arm of the installed write each operation calls, and the rules for values of a displaced
-  definition.
+  "Values and drafts of any type, made and changed through the type's installed write:
 
-  A **sealed value** is a value of a type's class. The only paths to one run the type's
-  checks: [[make]], [[seal]], and a write (`assoc`, `dissoc`, `conj`, `merge`, `into`) on a
-  sealed value, which reruns the checks that read a key it changes and seals the result or
-  throws. A **draft** is an unchecked map of a type that remembers which checks pass on its
-  entries; a write to it forgets the checks that read a key written.
+  - [[make]], [[draft]], [[clean]] and [[seal]] make values and drafts;
+  - [[sealed?]], [[proves?]], [[proven-checks]] and [[proven-concerns]] answer what a value or
+    a draft is known to pass, and [[checks-of]] and [[selects-nothing?]] what a selection
+    names in its type.
+
+  A **sealed value** is a value of a type's class that the current definition of the type
+  proved. The only paths to one run the type's checks: [[make]], [[seal]], and a write
+  (`assoc`, `dissoc`, `conj`, `merge`, `into`) on a sealed value, which reruns the checks that
+  read a key it changes and seals the result or throws. A **draft** is an unchecked map of a
+  type that remembers which checks pass on its entries; a write to it forgets the checks that
+  read a key written.
 
   A type defined with `:unsealed true` has no sealed values and no drafts. Its values are
-  made and written without checks and carry, in place, what a draft remembers: the checks
+  made and written without checks and hold, in place, what a draft remembers: the checks
   that passed on their entries. Such a value is never sealed; [[proves?]] asks its memory.
 
-  Every type is closed: a sealed value refuses a key its type does not declare, and a draft
-  holding one does not seal. A required field must be present in a sealed value."
+  Every type is closed: a value refuses a key its type does not declare, and a draft holding
+  one does not seal. A required field must be present in a sealed value.
+
+  Hidden: which arm of the installed write each operation calls, and the rules for values of
+  a displaced definition."
   (:require
    [clojure.set :as set]
    [recognitum.proof :as proof]
@@ -39,18 +44,21 @@
 ;;; ------------------------------------------------------------------ values
 
 (defn value-class
-  "The class of `type`'s sealed values."
+  "The class of `type`'s values."
   [type]
   (:recognitum.record/class type))
 
 (defn make
-  "A sealed value of `type` holding the entries of map `m`, after every check passes. Throws
-  where `m` holds a key the type does not declare, where a check fails or a required field is
-  missing, or where a later definition has displaced `type`; the ex-data's `:error` is
-  `:recognitum/undeclared-keys`, `:recognitum/check-failed` (which names the failed checks
-  under `:failed` and the absent required fields under `:missing`, where there are any) or
-  `:recognitum/displaced-constructor`. `remedy`, a string, is the displaced refusal's advice
-  in place of a call to the current `map->T`."
+  "A sealed value of `type` holding the entries of map `m`, once every check passes; for an
+  unsealed type, a value of those entries, with no check run. Throws ex-info whose `:error`
+  is:
+
+  - `:recognitum/displaced-constructor` where a later definition has displaced `type`;
+    `remedy`, a string, then replaces the advice to call the current `map->T`;
+  - `:recognitum/undeclared-keys` where `m` holds a key the type does not declare;
+  - `:recognitum/check-failed` where a check fails or a required field is absent, with the
+    report under `:failed` and `:blocked`, and the absent required fields under `:missing`
+    where there are any."
   ([type m] (make type m nil))
   ([type m remedy] ((gate type) :recognitum.record/make m remedy)))
 
@@ -62,7 +70,7 @@
     (boolean (and t (not (draft? x)) (not (class? x)) ((gate t) :recognitum.record/sealed? x nil)))))
 
 (defn unsealed?
-  "Whether `type` was defined unsealed: its values are made without checks and carry what
+  "Whether `type` was defined unsealed: its values are made without checks and remember what
   passed."
   [type]
   (true? (:recognitum.record/unsealed type)))
@@ -75,17 +83,22 @@
     (some-> (proof/memory (:strategy type) v) deref)))
 
 (defn draft
-  "A draft: of a type (given its class), holding nothing and passing nothing; of a sealed
-  value, holding its entries and passing every check; of a value of a displaced definition, a
-  draft of the type's current definition holding its entries and passing nothing, or, where
-  the type's name no longer names a current definition of the type, a refusal saying the type
-  has no current definition; of a draft, that draft itself, sharing what it remembers. An
-  unsealed type has no drafts: refuses its class and its values."
+  "A draft of `x`:
+
+  - of a type's class, a new draft that holds nothing and passes nothing;
+  - of a sealed value, a draft that holds its entries and passes every check;
+  - of a value of a displaced definition, a draft of the type's current definition that holds
+    its entries and passes nothing. Throws `:recognitum/no-current-definition` where the
+    type's name no longer names a current definition of the type;
+  - of a draft, that draft itself, sharing what it remembers.
+
+  An unsealed type has no drafts: throws `:recognitum/no-drafts` for its class and its
+  values."
   [x]
   (cond (draft? x) x
         (class? x) ((gate (type-of! x)) :recognitum.record/open nil nil)
         :else      (let [t (value-type! x)]
-                     ;; a current unsealed type's gate refuses ::draft-of itself
+                     ;; a current unsealed type's installed write refuses ::draft-of itself
                      (if (current? t)
                        ((gate t) :recognitum.record/draft-of x nil)
                        (let [_   (when (unsealed? t) (throw (no-drafts (:name t))))
@@ -123,20 +136,26 @@
                  :else (displaced-refusal (:name type) x)))))
 
 (defn seal
-  "The sealed value of draft `d`, after every check it does not remember as passing passes.
-  Refuses a draft holding an undeclared key before any check runs. Otherwise `d` remembers
-  each check that passed and forgets each that failed, whether or not the seal succeeds.
-  Throws as [[make]] does; a draft of a displaced definition's class is refused before any
-  check runs, and a value of a displaced definition as a write to it is. A sealed value is
-  returned as it is; given `sel`, once `sel` is read as [[proves?]] reads it.
+  "Seals `d` against every check, or, where `d` is a value of an unsealed type and `sel` is
+  given, against `sel`. By what `d` is:
 
-  With `sel`, a draft seals against every check: `sel` is [[recognitum.select/every]], or the
-  seal throws, running nothing. A value of an unsealed type runs the checks `sel` selects,
-  what they wait on and the shape checks of the fields it must or does hold, less what it
-  passes; it remembers what passed and forgets what failed, and is returned itself, or the
-  seal throws as [[make]] does. Where `sel` is not every and selects nothing in its type, the
-  seal throws the error `:recognitum/selects-nothing` before any check runs, unless a later
-  definition displaced the value's. Without `sel`, it is sealed against every check."
+  - a draft: returns the sealed value of its entries once every check it does not remember
+    as passing passes. Before any check runs, throws `:recognitum/undeclared-keys` where it
+    holds a key its type does not declare, and `:recognitum/displaced-constructor` where it is
+    a draft of a displaced definition's class. Else the draft remembers each check that
+    passed and forgets each that failed, whether or not the seal succeeds, and the seal
+    throws as [[make]] does. `sel`, where given, must be [[recognitum.select/every]]: else
+    the seal throws `:recognitum/draft-selection`, running nothing;
+  - a sealed value: returns it as it is, once `sel`, where given, is read as [[proves?]] reads
+    it;
+  - a value of a current unsealed type: runs the checks `sel` selects, what they wait on and
+    the shape checks of the fields it must or does hold, less what it is known to pass. It
+    remembers what passed and forgets what failed. Returns the value itself, or throws as
+    [[make]] does. Where `sel` is not every and selects nothing in its type, throws
+    `:recognitum/selects-nothing` before any check runs;
+  - a value of a displaced definition: throws as a write to it does, `:recognitum/displaced`;
+  - a type's class or type map: throws `:recognitum/not-a-value`; anything else:
+    `:recognitum/not-a-draft`."
   ([d]
    (cond (draft? d)  ((gate (type-of! d)) :recognitum.record/seal d nil)
          (sealed? d) d
@@ -163,8 +182,8 @@
                        :else (throw (not-sealable d)))))))
 
 (defn passes-of
-  "The checks `x` passes, as far as anything shows: every check for a sealed value, what a draft
-  remembers."
+  "The checks of `type` that `x` is known to pass: every check for a sealed value; what its
+  memory shows for a draft or a value of a current unsealed type; none for anything else."
   [type x]
   (cond (draft? x) (passes type (.-data ^Draft x) (marks-of x))
         (sealed? x) (:ids type)
@@ -175,21 +194,27 @@
 
 (defn selects-nothing?
   "Whether `sel` selects no check of the type of `x`, a value, a draft or a type's class, and
-  asks the presence of none of its required fields. Every selects nothing only in a type with
-  no check and no required field."
+  asks the presence of none of its required fields. `every` selects nothing only in a type
+  with no check and no required field."
   [sel x]
   (nothing? (type-of! x) sel))
 
 (defn proves?
-  "Whether `x` holds every required field and passes every check `sel` names in it, every
-  check those wait on, and the shape check of each field it must or does hold. For a sealed
-  value, a draft or a value of an unsealed type, each of a type's current definition, reads
-  `sel` first, and throws where it is no selection or holds an unknown name. Then: always true
-  for the sealed value; for the draft, false while it holds a key its type does not declare,
-  else a matter of its entries and what it remembers; for the value of an unsealed type, the
-  same, and false where `sel` is not every and selects nothing in its type. False, `sel`
-  unread, for anything else: a draft or a value of a displaced definition, a type, its class or
-  the type itself, and anything of no type."
+  "Whether `x` holds every required field and passes every check that `sel` names in its
+  type, every check those wait on, and the shape check of each field it must or does hold.
+
+  Where `x` is a sealed value, a draft, or a value of an unsealed type, each of its type's
+  current definition, reads `sel` first, and throws where `sel` is no selection or holds an
+  unknown name. Then:
+
+  - for a sealed value, true;
+  - for a draft, false while it holds a key its type does not declare; else what its entries
+    and its memory show;
+  - for a value of an unsealed type, what its entries and its memory show, and false where
+    `sel` is not every and selects nothing in its type.
+
+  False, with `sel` unread, for anything else: a draft or a value of a displaced definition,
+  a type's class or type map, and anything of no type."
   [x sel]
   (let [type (when-not (class? x) (type-of x))]
     (if (and type (or (draft? x) (instance? (:recognitum.record/class type) x)) (current? type))

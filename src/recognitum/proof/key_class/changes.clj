@@ -1,12 +1,18 @@
 (ns recognitum.proof.key-class.changes
-  "CHG, what a key-class value's changes call in place of its write: [[changes-fn]] for a change
-  guard, [[carry-fn]] for an unsealed definition's carry. Each answers a change as the flat pairs
-  of what it changes, or nil where it changes nothing; the value makes the new value from those
-  pairs. CHG holds no key. [[removed]] is the strategy's marker for a removed key. Hidden: how a
-  conj or a transient's changes are read into pairs, and the sentinel of an absent entry.")
+  "CHG, the function that a key-class value's changes call in place of its write:
+
+  - [[changes-fn]] makes CHG for a change guard;
+  - [[carry-fn]] makes CHG for an unsealed definition's carry.
+
+  CHG answers a change as the flat pairs of what it alters, or nil where it alters nothing;
+  the value makes the new value from those pairs. CHG holds no access key. [[removed]] is the
+  strategy's marker for a removed key. Hidden: how a conj or a transient's changes are read
+  into pairs, and the sentinel of an absent entry.")
 
 (set! *warn-on-reflection* true)
 
+;; The strategy's marker for a removed key: what a pair, a change guard's `changes` and a
+;; write's `v` hold for a key that the change removes. No value holds it.
 (defonce removed
   (reify Object (toString [_] "the removed key")))
 
@@ -23,8 +29,9 @@
       (doto (object-array 2) (aset 0 k) (aset 1 v)))))
 
 (defn- entries-change
-  "The entries of `es` that change `old`, flat, or nil: `es` an iterator over the entries of a
-  map, so no key comes twice. A value `removed` removes its key."
+  "The entries of `es` that change `old`, flat, or nil where none does. `es` is an iterator over
+  the entries of a map of `n` entries, so no key comes twice. A value `removed` removes its
+  key."
   [^clojure.lang.ILookup old n ^java.util.Iterator es]
   (let [a (object-array (* 2 n))]
     (loop [i 0]
@@ -39,8 +46,9 @@
               (== i (alength a)) a
               :else (java.util.Arrays/copyOf a i))))))
 
-;; What a change transient answers itself: `net` the pairs it holds that change the value it
-;; was made from, which persistent! hands to that value's cons.
+;; What a change transient calls on itself. `net` answers the pairs it holds that change the
+;; value it was made from; persistent! hands the transient to that value's cons, which calls
+;; `net`.
 (definterface ^:private ChangeSlots
   (live [])
   (^long at [k])
@@ -154,17 +162,20 @@
       (if (neg? i) (.add this k v) (aset over (inc i) v)))))
 
 (defn- change-transient
-  "A transient over `old` that keeps only what it is told; its persistent! is one
-  `(conj old this)`, so one call of the change guard with the net change. Reads
-  answer as a transient over `old`'s map would."
+  "A transient over `old` that keeps only what it is told. Its persistent! is one
+  `(conj old this)`, and so one call of CHG with the net change, or `old` itself where it was
+  told nothing. Reads answer as a transient over `old`'s map would."
   [^clojure.lang.IPersistentCollection old]
   (ChangeTransient. old (object-array 8) 0 (.count old) false))
 
 (defn changes-fn
-  "CHG for the change guard `cg`: what T's changes call in place of the write. With `old` and
-  the change, it answers the change as flat pairs k, v (`removed` for a removal), after
-  `(cg old changes)` returned, or nil where nothing changes, calling nothing; T makes the
-  value from `old` and those pairs. With `old` alone, a transient over it."
+  "CHG for the change guard `cg`: the function that T's changes call in place of the write.
+
+  - With `old` and the change (an item to `conj`, or a key and a value, the value [[removed]]
+    for a removal), calls `(cg old changes)` and, where it returns, answers the change as flat
+    pairs k, v. Where nothing changes, calls nothing and answers nil. T makes the new value
+    from `old` and the pairs.
+  - With `old` alone, answers a transient over `old`."
   [^clojure.lang.IFn cg]
   (let [guarded (fn [old ^objects ch]
                   (when ch

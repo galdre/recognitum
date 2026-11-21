@@ -58,7 +58,7 @@ depend on.
 | | `recognitum.define.methods` | The sections of methods: protocols, interfaces, hints, and each method's function. | `recognitum.body`, `recognitum.define.clauses` |
 | | `recognitum.define.bundles` | What `defchecks`, `defcopy` and `defconcern` expand to, and the bundle values they build. | `recognitum.body`, `recognitum.define.clauses`, `recognitum.select` |
 | | `recognitum.define.clauses` | What a definition's symbols name, one clause of checks with its flags, and the refusals every defining form shares. | `recognitum.body`, `recognitum.record.probe` |
-| | `recognitum.record` | Defines a type from compiled checks: its type map, its write and its key's handle. | `recognitum.proof`, `recognitum.record.draft`, `recognitum.record.memory`, `recognitum.record.probe`, `recognitum.record.reports`, `recognitum.record.runs`, `recognitum.record.types`, `recognitum.record.values`, `recognitum.record.views`, `recognitum.select` |
+| | `recognitum.record` | Defines a type from compiled checks: its type map, its installed write and the handle that holds its access key. | `recognitum.proof`, `recognitum.record.draft`, `recognitum.record.memory`, `recognitum.record.probe`, `recognitum.record.reports`, `recognitum.record.runs`, `recognitum.record.types`, `recognitum.record.values`, `recognitum.record.views`, `recognitum.select` |
 | | `recognitum.record.walk` | Seals, or opens as drafts, the values that a walk of a nested shape reaches. | `recognitum.proof`, `recognitum.record.draft`, `recognitum.record.reports`, `recognitum.record.runs`, `recognitum.record.selection`, `recognitum.record.types`, `recognitum.record.values`, `recognitum.select` |
 | | `recognitum.record.runs` | Runs the checks a selection names in one value or in many, in one run of the engine. | `recognitum.record.draft`, `recognitum.record.memory`, `recognitum.record.probe`, `recognitum.record.reports`, `recognitum.record.selection`, `recognitum.record.types`, `recognitum.record.values`, `recognitum.select` |
 | | `recognitum.record.selection` | What a selection asks of a type: the checks it selects with the presence checks of the required fields, and whether it selects nothing. | `recognitum.select` |
@@ -80,7 +80,7 @@ depend on.
 | The proof layer | `recognitum.proof` | The protocol between the record layer and a proof strategy. | Nothing. |
 | | `recognitum.proof.key-class` | The one proof strategy that the library has. | `recognitum.proof`, `recognitum.proof.key-class.analysis`, `recognitum.proof.key-class.changes`, `recognitum.proof.key-class.emit` |
 | | `recognitum.proof.key-class.analysis` | What defining a definition takes, or why the strategy refuses it. | `recognitum.proof` |
-| | `recognitum.proof.key-class.changes` | What a value's changes call in place of its write: the net change as pairs, which holds no key. | Nothing. |
+| | `recognitum.proof.key-class.changes` | What a value's changes call in place of its write: the net change as pairs, which holds no access key. | Nothing. |
 | | `recognitum.proof.key-class.emit` | The bytecode of the classes the key-class strategy defines. | `recognitum.proof` |
 
 Three consequences of the table:
@@ -317,7 +317,7 @@ The docstring of `recognitum.engine` names four functions for a caller: `body-fo
   `:after` holds the ids of the checks that this check waits on. `define` throws where a check
   waits on an id that the map lacks, and where the waits form a cycle.
 - `(run-all items)` runs a group. Each item is `[engine value assumed]`: `value` is a map
-  from key to field value, and `assumed` is a set of ids. A check in `assumed` counts as passed
+  from key to field value, and `assumed` is a collection of ids. A check in `assumed` counts as passed
   and does not run. `run-all` returns one result for each item, in order:
   `{:failed {id failure} :blocked #{id ...}}`.
 - `(runner engine ids)` returns a function of a value and a set of assumed ids. That function
@@ -346,7 +346,7 @@ what it would answer if each of its reads called its source immediately, with it
 Within one run, the docstring of `recognitum.engine` promises three things:
 
 - A source is asked for a key at most once, so each call passes distinct keys.
-- A source is asked for exactly the keys that the checks that run reach.
+- A source is asked for a key exactly where a check that runs reaches a read of that key.
 - A source is called no more times than the longest chain of reads has links. A chain runs
   along a path of waits (a check, then a check that waits on it, and so on), and each `&fetch`
   or `&fetch-each` on the path is one link.
@@ -524,8 +524,9 @@ guarantees, and it is the full statement. In short:
   that handle, or the write installed on that handle accepted it, or a guard or the change
   guard installed with that write returned for the change.
 - **Changes.** `assoc`, `dissoc`, `conj`, `merge` and `into` on a proven value each make one
-  call: of the installed write, or of a guard where one is installed. With no write installed,
-  every change gives a map that is not proven. `empty` throws.
+  call: of the installed write, or of a guard where one is installed. An `assoc` or a `dissoc`
+  that alters nothing may return the value itself and call nothing. With no write installed,
+  every change that alters a value gives a map that is not proven. `empty` throws.
 - **A value of a definition is a map.** It keeps one field for each key that its definition declares, and
   answers as the plain map of its entries. It prints as its map, and the text never reads
   back as a proven value.
@@ -617,12 +618,11 @@ tests that one strategy by name, so a second strategy would need tests of its ow
 
 ### Why `recognitum.proof` is never reloaded
 
-The docstring of `recognitum.proof` says that the namespace is never reloaded, because
-reloading it would orphan every handle. So do not evaluate
+The docstring of `recognitum.proof` says never to reload the namespace. So do not evaluate
 `(require 'recognitum.proof :reload)`.
 
 Evaluating the namespace again makes new protocols and new interfaces under the old names.
-The handles and the strategy made before the reload implement the old ones. After
+The handles, the values and the strategy made before the reload implement the old ones. After
 `(require 'recognitum.proof :reload)` in a JVM that held a type, a handle and a value, three
 things failed:
 

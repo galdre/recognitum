@@ -1,11 +1,16 @@
 (ns recognitum.define.clauses
-  "What every defining macro reads alike: what a definition's symbols name ([[resolve-var]],
-  [[kind-of]], [[checks-marker?]], [[id-of]]), one clause of checks with its flags and docstring
-  ([[parse-clause]]), a body's reads of sources written through `recognitum.record.probe/sourced`
-  ([[sourced-reads]]), and the refusals that every defining form shares ([[refuse-meta!]],
-  [[topo-check!]], [[refuse-duplicates!]]). Each function returns a form or data, or throws the
-  refusal of a definition. Hidden: the grammar of a clause's flags and the remedies its refusals
-  write."
+  "What every defining macro reads alike:
+
+  - what a definition's symbols name: [[resolve-var]], [[kind-of]], [[checks-marker?]],
+    [[id-of]];
+  - one clause of checks, with its flags and docstring: [[parse-clause]];
+  - a body's reads of sources, written through `recognitum.record.probe/sourced`:
+    [[sourced-reads]];
+  - the refusals that every defining form shares: [[refuse-meta!]], [[topo-check!]],
+    [[refuse-duplicates!]].
+
+  Each function returns a form or data, or throws the refusal of a definition. Hidden: the
+  grammar of a clause's flags and the remedies that its refusals write."
   (:require
    [clojure.string :as str]
    [recognitum.body :as body :refer [fail!]]
@@ -14,9 +19,10 @@
 ;;; ------------------------------------------------------------------ reads of sources
 
 (defn sourced-reads
-  "`form`, a body as `body/analyze` returns it, with the source of each `(&fetch src k)` and
-  `(&fetch-each src ks)` written as `(recognitum.record.probe/sourced src)`, so that a probe's
-  overrides answer in the source's place. A quoted form is data and stays as it is."
+  "`form`, a body's `:form` as [[recognitum.body/analyze]] returns it, with the source of each
+  `(&fetch src k)` and `(&fetch-each src ks)` written as `(recognitum.record.probe/sourced src)`,
+  so that a probe's overrides answer in the source's place. A quoted form is data and stays as it
+  is."
   [form]
   (cond (seq? form)
         (let [h (first form)
@@ -37,8 +43,8 @@
 (defn kind-of [v] (when (var? v) (let [x @v] (when (map? x) (:recognitum/kind x)))))
 
 (defn checks-marker?
-  "Whether `s` resolves to the var whose symbol is `marker`, the one that starts a section of
-  own checks."
+  "Whether `s` is a symbol that resolves to the var named by `marker`, the var that starts a
+  section of own checks (`rec/checks`)."
   [marker s]
   (and (symbol? s) (= marker (some-> (resolve-var s) symbol))))
 
@@ -52,15 +58,15 @@
       (when (var? v) v))))
 
 (defn- concern-var
-  "The concern var whose id is keyword `k`: `rec/defconcern` defined it under the keyword's name,
-  in the keyword's namespace."
+  "The concern var whose id is keyword `k`, or nil: the var that `rec/defconcern` defined under
+  the keyword's name, in the keyword's namespace."
   [k]
   (when-let [v (named-var k)]
     (when (and (:recognitum/concern (meta v)) (= k (keyword (symbol v)))) v)))
 
 (defn- symbol-concern
-  "The keyword of the concern symbol `s` names: the var it resolves to, where `rec/defconcern`
-  defined it. nil for a symbol that names no concern."
+  "The id of the concern that symbol `s` names, where `s` resolves to a var that `rec/defconcern`
+  defined; nil where `s` names no concern."
   [s]
   (when-let [v (resolve-var s)]
     (when (:recognitum/concern (meta v)) (keyword (symbol v)))))
@@ -77,8 +83,8 @@
   (if (= (namespace k) (str *ns*)) (str "::" (name k)) (str k)))
 
 (defn- show-flags
-  "The flags `x`, a keyword, a symbol or a set, as written in this namespace; a set's members in
-  the order of their text."
+  "The flags `x`, a keyword, a symbol or a set, as written in this namespace; a set's members
+  sorted as text."
   [x]
   (let [one #(if (keyword? %) (show-flag %) (pr-str %))]
     (if (set? x) (str "#{" (str/join " " (sort (map one x))) "}") (one x))))
@@ -87,10 +93,10 @@
   "an input clause takes no concern or :override; they go after a check's waits")
 
 (defn refuse-meta!
-  "Refuses metadata written on `x`, the `place` named in the message: a clause, its name or its
-  waits, or a section's head. The macros read none there; a clause's concerns and `:override`
-  follow its waits. `nm` names the clause in the remedy; with `:input-of` in `ctx`, the clause
-  binds an input of that bundle."
+  "Refuses metadata written on `x`: a clause, its name or its waits, or a section's head. The
+  macros read no metadata there, and ignore what the reader adds (`:line` and the like). `place`
+  describes `x` in the message, and `nm` names the clause in the remedy. With `:input-of` in
+  `ctx`, the clause binds an input of that bundle, and the remedy is an input clause's."
   [ctx place x nm]
   (when-let [m (not-empty (apply dissoc (meta x) reader-meta))]
     (let [shown (str/join " " (for [[k v] m]
@@ -103,8 +109,9 @@
                              nm " [waits] " (if k (show-flag k) "::concern") " body)")))))))
 
 (defn- not-the-id!
-  "Refuses keyword `k` on clause `nm`, whose name resolves, in the keyword's namespace, to the
-  concern var `v` of another namespace: the message gives the concern's two right spellings."
+  "Refuses keyword `k` among the flags of clause `nm`: `k` is not a concern's id, but its name
+  resolves, in its namespace, to the concern var `v`, which a namespace other than `k`'s defines.
+  The message gives the two right spellings of the concern."
   [ctx nm k v]
   (let [id (keyword (symbol v))
         short (symbol (name k))
@@ -114,9 +121,10 @@
                     " is the concern " (symbol v) ", whose id is " id ". Write " sym " or " id))))
 
 (defn- clause-flags
-  "The flags `x` written after the waits of clause `nm`, a keyword, a symbol or a set of them, as
-  a set of keywords: `:override`, and concerns that [[defconcern]] defined. A symbol names the
-  concern whose var it resolves to; a keyword, the concern whose id it is."
+  "The flags `x` written after the waits of clause `nm`, as a set of keywords: `:override` and
+  the ids of concerns that `rec/defconcern` defined. `x` is a keyword, a symbol or a set of them.
+  A symbol names the concern whose var it resolves to; a keyword names the concern whose id it
+  is. Refuses any other flag."
   [ctx nm x]
   (set (for [k (if (set? x) x #{x})]
          (cond (= :override k) k
@@ -135,10 +143,11 @@
                (fail! ctx (str "a clause's flags are keywords and concerns' symbols: " (show-flags x) " on " nm))))))
 
 (defn- flags-written
-  "The flags of a clause, the first of `more`, the forms after its waits, when more forms follow
-  it: a keyword or a set, or a symbol. An input clause takes no flags; a keyword, a set or a
-  symbol that names a concern there is returned, to be refused, and any other symbol is its
-  body."
+  "The flags of a clause, or nil where it has none. `more` is the forms after the clause's waits.
+  Its first form is the flags where another form follows it and it is a keyword, a set or a
+  symbol. In an input clause (`:input-of` in `ctx`), which takes no flags, a symbol is returned
+  only where it names a concern, and the caller refuses what is returned; any other symbol is
+  the clause's body."
   [ctx more]
   (let [x (first more)]
     (when (and (next more)
@@ -154,9 +163,9 @@
     (boolean (or (flag? x) (and (set? x) (some flag? x))))))
 
 (defn- clause-head
-  "The head of clause `nm` as it should be written, up to its body: its waits, the flags
-  `flags` (keywords, symbols and sets of them, nils left out) in one place, and its docstring as
-  `\"...\"` where `doc` is one."
+  "The text of clause `nm` as it should be written, up to its body: its waits; the flags in
+  `flags` (keywords, symbols and sets of them; nils are left out), as one set where there are
+  several; and `\"...\"` in place of the docstring where `doc` is not nil."
   [nm waits flags doc]
   (let [fs (distinct (mapcat #(if (set? %) (sort-by show-flags %) [%]) (remove nil? flags)))]
     (str "(" (pr-str nm) " " (pr-str waits) " " (show-flags (if (next fs) (set fs) (first fs)))
@@ -168,10 +177,11 @@
   (boolean (and (qualified-keyword? x) (concern-var x))))
 
 (defn- refuse-flag-alone!
-  "Refuses a check clause `nm` whose body is one form `x`, after its flags and docstring, that
-  is only a concern: a concern's id, a symbol that names a concern, or a set holding one. Such a
-  form is a flag, so the clause has flags and no body. A keyword whose name resolves to a
-  concern's var, and that is not the concern's id, is refused as the flags' place refuses it."
+  "Refuses check clause `nm` where `x`, the one form of its body after its flags and docstring,
+  is a concern: a concern's id, a symbol that names a concern, or a set holding one of those.
+  Such a form reads as a flag, so the clause has flags and no body. Where `x` is a keyword whose
+  name resolves to a concern's var but that is not the concern's id, or a set holding one,
+  refuses it as [[not-the-id!]] does."
   [ctx nm waits written doc x]
   (let [one? #(or (concern-keyword? %) (and (symbol? %) (symbol-concern %)))
         not-id (fn [k] (when (and (qualified-keyword? k) (not (concern-var k)))
@@ -185,10 +195,10 @@
       (set? x) (when-let [k (some #(when (and (keyword? %) (not-id %)) %) x)] (not-the-id! ctx nm k (not-id k))))))
 
 (defn- refuse-misplaced!
-  "Refuses a body, the forms of clause `nm` after its flags and docstring, that holds before its
-  last form a form [[flag-form?]] accepts: as a statement it does nothing, and no flag is read
-  there. The message names where the forms are, and writes the clause's head with them among
-  its flags."
+  "Refuses `body`, the forms of clause `nm` after its flags and docstring, where a form before the
+  last is a flag ([[flag-form?]]). No flag is read in a body, and such a form, evaluated as a
+  statement, does nothing. The message says where the forms are, and writes the clause's head
+  with them among its flags."
   [ctx nm waits written doc body]
   (let [before (butlast body)]
     (when-let [found (seq (filter flag-form? before))]
@@ -208,11 +218,21 @@
                                " in one set, as in " head))))))))
 
 (defn parse-clause
-  "`(name [waits] flags? \"doc\"? body...)`, where `flags` is a keyword, a symbol or a set of
-  them: its concerns and `:override`. Metadata on the clause, its name or its waits is refused,
-  and so is a body that holds a flag before its last form, and a check's body that is one form
-  and only a concern. With `:input-of` in `ctx`, the clause binds an input of that bundle, takes
-  no flags, and its one form is the input's value whatever it is."
+  "Parses `clause`, `(name [waits] flags? \"doc\"? body...)`, where `flags` is a keyword, a
+  symbol or a set of them: the clause's concerns and `:override`. Returns
+  `{:name :waits :doc :concerns :override? :line :body}`; `:body` is one form, and a body of
+  several forms is wrapped in `do`.
+
+  Refuses:
+
+  - a clause of another shape, and a clause with no body;
+  - metadata on the clause, its name or its waits;
+  - a flag that names no concern and is not `:override`;
+  - a body that holds a flag before its last form;
+  - a check's body that is one form and a concern.
+
+  With `:input-of` in `ctx`, the clause binds an input of that bundle and takes no flags, and a
+  body of one form is the input's value, whatever that form is."
   [ctx clause]
   (let [ctx (assoc ctx :line (:line (meta clause)))]
     (when-not (and (seq? clause) (symbol? (first clause)) (vector? (second clause)))
@@ -237,8 +257,9 @@
        :body (if (next body) (cons 'do body) (first body))})))
 
 (defn topo-check!
-  "Refuses waits that form a cycle. `read-wait?`, given a check and a check it waits on, says
-  whether the wait comes from a read rather than from the check's wait vector."
+  "Refuses waits that form a cycle among the checks `ids`; `waits-of` gives the ids that a check
+  waits on. `read-wait?`, given a check and a check that it waits on, says whether the wait comes
+  from a read rather than from the check's wait vector; where one does, the message says so."
   ([ctx ids waits-of] (topo-check! ctx ids waits-of (constantly false)))
   ([ctx ids waits-of read-wait?]
    (let [state (atom {})]

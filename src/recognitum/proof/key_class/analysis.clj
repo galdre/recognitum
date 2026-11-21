@@ -1,10 +1,15 @@
 (ns recognitum.proof.key-class.analysis
   "The analysis of a key-class definition: what defining it takes, or why it is refused.
-  [[analysis]] answers the interfaces, the plan of forwarded methods, the print preferences and
-  the other parts `define` needs, or a refusal; [[refusal]] answers the refusal alone, and
-  [[outranked]] the refusal of a print preference that cannot be set. Nothing here defines a
-  class, holds a key or changes a multimethod. Hidden: how the methods of the listed interfaces
-  are resolved against the map's, and which default bodies compete."
+
+  - [[analysis]] answers the interfaces, the plan of forwarded methods, the print preferences
+    and the other parts that `recognitum.proof.key-class` needs to define the type, or a
+    refusal.
+  - [[refusal]] answers the refusal alone.
+  - [[outranked]] answers the refusal of a print preference that cannot be set.
+
+  Nothing here defines a class, holds an access key or changes a multimethod. Hidden: how the
+  methods of the listed interfaces are resolved against the map's, and which default bodies
+  compete."
   (:require [clojure.string :as str]
             [recognitum.proof])
   (:import [clojure.lang DynamicClassLoader MultiFn RT]
@@ -13,16 +18,17 @@
 (set! *warn-on-reflection* true)
 
 (def ^:private max-keys
-  "The most keys a definition declares: T has a constructor taking every field, which the
-  assoc of each key calls with the fields pushed in order, and a constructor takes at most
-  255 slots, this and meta, ext and the count among them. A defrecord's constructor has the
+  "The most keys that a definition may declare. T has a constructor that takes every field,
+  which the assoc of each key calls, and a JVM method takes at most 255 parameter slots, of
+  which `this`, the metadata, `ext` and the count take four. A defrecord's constructor has the
   same bound."
   250)
 
 (def ^:private max-words
-  "The most characters of the words a definition hands down as `:instead`. T's constructor
-  loads its message, which holds them, as one constant of the class file, at most 65535 bytes;
-  a character takes at most three, which leaves room for the opening and the class name."
+  "The most characters that a definition's `:instead` may hold. T's constructor loads its
+  message, which holds those words, as one constant of the class file, and a constant holds at
+  most 65535 bytes. A character takes at most three bytes, so this bound leaves room for the
+  message's opening words and the class name."
   10000)
 
 (defn- refusal-of
@@ -31,7 +37,8 @@
   (merge {:kind kind :message (str "refused definition: " msg ": " (pr-str x))} more))
 
 (defn- refuse
-  "Ends the analysis of a definition with [[refusal-of]] its arguments."
+  "Throws, to end the analysis of a definition, the refusal that [[refusal-of]] makes of its
+  arguments. [[analysis]] catches it."
   [kind msg x & {:as more}]
   (throw (ex-info "refused" {:recognitum.proof.key-class/refusal (refusal-of kind msg x more)})))
 
@@ -120,9 +127,12 @@
   [java.util.function.BiConsumer java.util.function.Predicate])
 
 (defn- check-shape!
-  "Refuses a definition that is not {:interfaces [class ...] :methods {signature f}}, whose
-  keys are not distinct keywords or are too many, whose :unsealed is not a boolean, or one of
-  whose `interfaces` a draft implements."
+  "Refuses a definition:
+
+  - that is not `{:interfaces [class ...] :methods {signature f}}`;
+  - whose keys are not distinct keywords, or are more than [[max-keys]];
+  - whose `:unsealed` is not true, false or nil;
+  - one of whose `interfaces` a draft implements."
   [definition interfaces methods]
   (when-not (and (map? definition) (or (nil? interfaces) (sequential? interfaces))
                  (or (nil? methods) (map? methods)) (every? class? interfaces))
@@ -179,7 +189,7 @@
 
 (defn- given-methods
   "The definition's `methods`, {signature f}, as {[name params] f}. Refuses an f that is
-  neither nil nor a function, and two signatures of one method."
+  neither nil nor `ifn?`, and two signatures of one method."
   [by-sig methods]
   (reduce (fn [acc [sig f]]
             (let [k (resolve-signature by-sig sig)]
@@ -215,16 +225,21 @@
             :interfaces (vec (map #(.getDeclaringClass ^Method %) ds)))))
 
 (defn- plan
-  "The methods of `definition` that T forwards, as [interfaces plan]: each entry
-  {:name :params :ret :f}, `:f` nil where no function implements it. Refuses a signature no
-  listed interface declares, one that matches more than one method or names a method T has
-  without the definition, two signatures of one method, `equals` and `hashCode`, two
-  listed methods of one name and parameters with different return types (among the methods
-  T does not have as a map), a method with no function whose most specific declarations
-  give more than one default body, and an interface that a draft implements.
+  "The methods of `definition` that T forwards, as [interfaces plan]: each entry of the plan
+  is {:name :params :ret :f}, `:f` nil where no function implements the method. Besides the
+  refusals of the definition's shape, refuses:
+
+  - a signature that no listed interface declares, that matches more than one method, or that
+    names a method T has without the definition;
+  - two signatures of one method;
+  - `equals` and `hashCode`;
+  - two listed methods of one name and parameters with different return types, among the
+    methods T does not have as a map;
+  - a method with no function whose most specific declarations give more than one default
+    body.
 
   A method with no function and no default body among its most specific declarations
-  forwards to nothing, and throws; one with exactly one keeps that body."
+  forwards to nothing, and throws; one with exactly one default body keeps that body."
   [{:keys [interfaces methods] :as definition}]
   (check-shape! definition interfaces methods)
   (let [listed  (group-by first (mapcat members (distinct interfaces)))
@@ -242,9 +257,9 @@
 
 (defn- print-preferences
   "Where `print-method` or `print-dup` has an entry for a listed interface or one of its
-  supertypes, the preferences of the map's entry, and of `Proven`'s, over it, as
-  [multimethod-name multimethod winner entry]: else a value of both would match two entries
-  and print neither."
+  supertypes, the preferences of the map's entry, and of `Proven`'s, over that entry, as
+  [multimethod-name multimethod winner entry]. Without them, a value, which is both a map and
+  an instance of the interface, would match two entries, and printing it would throw."
   [ifaces]
   (for [[nm ^MultiFn mf] [["print-method" print-method] ["print-dup" print-dup]]
         k (keys (methods mf))
@@ -272,12 +287,14 @@
            (catch IllegalStateException _ (throw (ex-info "refused" {:recognitum.proof.key-class/refusal (outranked nm k)})))))))
 
 (defn analysis
-  "What defining `definition` takes, `{:interfaces :plan :prefs}`, or why it is refused,
-  `{:refusal r}`. Defines and sets nothing. Besides [[plan]]'s refusals, refuses a listed
-  interface whose name now loads another class (an interface defined again after the
-  definition named it), which would leave values outside the one listed, a print
-  preference that cannot be set, and an `:instead` that is not a string or nil, or is
-  longer than [[max-words]]."
+  "What defining `definition` takes, `{:interfaces :plan :prefs :keys :unsealed :instead}`,
+  or why it is refused, `{:refusal r}`. Defines and sets nothing. Besides [[plan]]'s refusals,
+  refuses:
+
+  - a listed interface whose name now loads another class (an interface defined again after
+    the definition named it), which would leave the values outside the interface listed;
+  - a print preference that cannot be set;
+  - an `:instead` that is neither a string nor nil, or is longer than [[max-words]]."
   [definition]
   (try
     (let [[ifaces plan] (plan (or definition {}))
@@ -299,6 +316,7 @@
       (if-let [r (:recognitum.proof.key-class/refusal (ex-data e))] {:refusal r} (throw e)))))
 
 (defn refusal
-  "Nil where [[define]] accepts `definition`, else the refusal it throws."
+  "Nil where `recognitum.proof.key-class` accepts `definition`, else the refusal that defining
+  it throws."
   [definition]
   (:refusal (analysis definition)))

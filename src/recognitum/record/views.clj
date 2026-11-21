@@ -1,8 +1,12 @@
 (ns recognitum.record.views
-  "What a write's checks read in place of the map the write would make, and the forms of a
-  type's key guards and change guard. A definition places these forms in its expansion, so
-  each type's view class and guards are code of their own. `Changed` is the view of a change of
-  several keys, shared by every type."
+  "Views, and the forms of a type's key guards and change guard. A view is what a write's
+  checks read in place of the map that the write would make: it reads as the old value with
+  the change applied, and answers a read of one key without building that map.
+
+  - [[view-type]] defines the view class of a one-key write, and [[guard-maker]] and
+    [[change-guard-maker]] give the forms of the guards. A definition places these forms in
+    its expansion, so that each type's view class and guards are code of their own.
+  - `Changed` is the view of a change of several keys, which every type shares."
   (:require
    [recognitum.proof :as proof]))
 
@@ -11,12 +15,16 @@
   [old k v]
   (with-meta (assoc (into {} (seq old)) k v) (meta old)))
 
+;; HotSpot keeps one profile of receiver types for each call site in a method's bytecode. A
+;; definition places the forms below in its expansion, so that the call sites in a type's view
+;; and guards are that type's own, and their profiles hold that type's classes alone.
+
 (defmacro view-type
-  "Defines the class named `cname` (a simple symbol, in the current namespace) of the view a
-  one-key write's checks read: the map `old` with `k` set to `v`. A read of a key answers
-  without building that map, and anything else builds it. A definition places this form in
-  its expansion, so each type's view is a class of its own and its reads of `old` keep a
-  profile per type."
+  "Defines `cname`, a simple symbol, in the current namespace, as the class of the view that a
+  one-key write's checks read: `(cname. old k v)` reads as the map `old` with `k` set to `v`.
+  A read of a key answers without building that map, and anything else builds it. A
+  definition places this form in its expansion, so that each type's view is a class of its
+  own."
   [cname]
   (let [full (symbol (str (namespace-munge *ns*) "." cname))
         [old k v x nf a b o f init args] (map #(gensym (name %)) '[old k v x nf a b o f init args])
@@ -61,13 +69,17 @@
        (~'equals [this# ~o] (.equals ~(with-meta w {:tag 'java.lang.Object}) ~o)))))
 
 (defmacro guard-maker
-  "The form of a function of `current`, a key's run `r`, the key `k`, `clean?` and `refuse`
-  that answers the key's guard: it calls `(refuse old nil)` where `current` holds false, runs
-  `r` on the view of `old` with `k` set to `v`, an instance of the class [[view-type]] named
-  `cname` defines, and calls `(refuse old result)` where the result is not clean. Without
-  `cname`, the form defines a view class of its own first. A definition places this form in
-  its expansion, so each type's guards and view are code of their own and their calls keep a
-  profile per type."
+  "The form of a function of `current`, `r`, `k`, `clean?` and `refuse` that returns the
+  guard `(g old v)` of the key `k`. `current` is the volatile that holds whether the type is
+  current, and `r` the runner of the readers of `k`. The guard:
+
+  - calls `(refuse old nil)` where `current` holds false;
+  - runs `r` on the view of `old` with `k` set to `v`, an instance of `cname`, a class that
+    [[view-type]] defined;
+  - calls `(refuse old result)` where `(clean? result)` is false.
+
+  Without `cname`, the form first defines a view class of its own. A definition places this
+  form in its expansion, so that each type's guards and view are code of their own."
   ([]
    (let [cname (gensym "View")]
      `(do (view-type ~cname)
@@ -81,13 +93,18 @@
             (when-not (clean?# result#) (refuse# old# result#))))))))
 
 (defmacro change-guard-maker
-  "The form of a function of `own!`, `key-guards` (an IdentityHashMap from each declared key to
-  its guard, or to `none` where its readers read a source), `removed`, `none`, `many` and
-  `whole` that answers the change guard `(cg old changes)`: it calls `(own! old)`; a change
-  that sets one key with a guard calls that guard, one with `none` calls `(whole old changes
-  false)`, and any other calls `(many old changes)`. A definition places this form in its
-  expansion, so each type's change guard is code of its own and its calls keep a profile per
-  type."
+  "The form of a function of `own!`, `key-guards`, `removed`, `none`, `many` and `whole` that
+  returns the change guard `(cg old changes)`. `key-guards` is an IdentityHashMap from each
+  declared key to its guard, or to `none` where its readers read a source. The change guard
+  calls `(own! old)`, then:
+
+  - for a change that sets one key that has a guard, calls that guard with `old` and the
+    key's new value;
+  - for a change that sets one key mapped to `none`, calls `(whole old changes false)`;
+  - for any other change, calls `(many old changes)`.
+
+  A definition places this form in its expansion, so that each type's change guard is code
+  of its own."
   []
   (let [t (fn [tag s] (with-meta (gensym s) {:tag tag}))
         own (t 'clojure.lang.IFn "own") many (t 'clojure.lang.IFn "many") whole (t 'clojure.lang.IFn "whole")

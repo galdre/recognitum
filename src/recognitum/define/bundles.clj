@@ -1,9 +1,13 @@
 (ns recognitum.define.bundles
-  "Bundles and concerns: what `defchecks` ([[defchecks]]), `defcopy` ([[defcopy]]) and
-  `defconcern` ([[defconcern]]) expand to, and the bundle values their expansions build:
-  [[check-of]] reads a check of a bundle, and [[copy-bundle]] copies a bundle with its checks
-  renamed. [[input-key]] is the key an input of a bundle reads under. Hidden: how a bundle's
-  checks compile and become vars."
+  "Bundles and concerns:
+
+  - [[defchecks]], [[defcopy]] and [[defconcern]] are what `rec/defchecks`, `rec/defcopy` and
+    `rec/defconcern` expand to;
+  - [[check-of]] and [[copy-bundle]] are what the expansions call at run time, to make the value
+    of a check's var and to copy a bundle with its checks renamed;
+  - [[input-key]] is the key under which a bundle's check reads an input.
+
+  Hidden: how a bundle's checks compile and become vars."
   (:require
    [recognitum.body :as body :refer [fail!]]
    [recognitum.define.clauses :refer [checks-marker? id-of kind-of parse-clause refuse-duplicates! refuse-meta!
@@ -32,8 +36,8 @@
 
 (defn- compile-bundle-checks
   "The `parsed` clauses of the bundle `bname`, each compiled: its id, the ids it waits on
-  among the bundle's check `names`, the inputs it reads, and its run. Refuses a check not
-  named by a plain symbol and a wait on a check the bundle does not have."
+  among the bundle's check `names`, the inputs it reads, its sources, and its run. Refuses a
+  check whose name is not a plain symbol, and a wait on a check that the bundle does not have."
   [ctx env bname fields names compile-body parsed]
   (vec (for [{:keys [name waits body] :as c} parsed
              :let [cctx (assoc ctx :line (:line c) :fields fields :required #{}
@@ -50,10 +54,14 @@
                 :sources sources :fetches? fetches? :run (compile-body (sourced-reads form))))))
 
 (defn defchecks
-  "The expansion of `(rec/defchecks bname \"doc\"? [inputs] rec/checks clauses...)`, `doc` nil
-  where the form has none. `opts` holds the engine's `:compile-body`, the `:read-macros`
-  [[recognitum.body/analyze]] takes, and `:checks-marker`, the symbol of the var that starts a
-  section of own checks."
+  "The expansion of `(rec/defchecks bname \"doc\"? [inputs] rec/checks clauses...)`, which
+  defines the bundle's var and a var for each check, and evaluates to the bundle's var. `doc` is
+  nil where the form has none, and `marker` is the form written where `rec/checks` belongs.
+  `opts` holds:
+
+  - `:compile-body`, the engine's compiler of a check body;
+  - `:read-macros`, as [[recognitum.body/analyze]] takes it;
+  - `:checks-marker`, the symbol of the var that starts a section of own checks."
   [env bname doc inputs marker clauses {:keys [compile-body read-macros checks-marker]}]
   (let [ctx {:where (str *ns* "/" bname) :read-macros read-macros}
         _ (when-not (and (simple-symbol? bname) (vector? inputs) (every? simple-symbol? inputs))

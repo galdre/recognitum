@@ -74,9 +74,14 @@
   {:strategy strategy :define #'engine/define :run-all #'waves/run-all :runner #'runner/runner})
 
 (def ^:private expansion
-  "What the defining macros give the record layer: the engine's compiler of bodies, the body
-  macros by var as the kind of read each is, the var that starts a section of own checks, and
-  the proof strategy, which answers a definition's refusal and its class's name."
+  "What the defining macros pass to `recognitum.define` and `recognitum.define.bundles` when they
+  expand:
+
+  - `:compile-body`, the engine's compiler of a check body;
+  - `:read-macros`, a map from the symbol of each body macro's var to the kind of read it is;
+  - `:checks-marker`, the symbol of the var that starts a section of own checks;
+  - `:strategy`, the proof strategy, which answers the name of a type's class and refuses a
+    definition that it cannot make."
   {:compile-body engine/body-form
    :read-macros `{fetch :fetch, fetch-each :fetch-each, extant? :extant?, when-extant :when-extant}
    :checks-marker `checks

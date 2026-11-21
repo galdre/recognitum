@@ -8,7 +8,8 @@
    [recognitum.select :as select]))
 
 (defn- presence
-  "The presence check of the required field `f`: a check with no name, standing for itself."
+  "The id that stands for the presence check of the required field `f`, a check with no name
+  of its own."
   [f]
   [:recognitum.record/present f])
 
@@ -28,8 +29,8 @@
 
 (defn- asked*
   "The required fields of `type` whose presence `sel` asks: those whose presence check `sel`
-  selects, or something it selects waits on. Every check waits on the presence checks of the
-  required fields it reads."
+  selects, and those that a check `sel` selects, or a check that one waits on, reads. Every
+  check waits on the presence check of each required field it reads."
   [type sel]
   (let [required (:required type)
         s (selected type sel)]
@@ -38,8 +39,7 @@
           (select/closure type (remove vector? s)))))
 
 (defn asked
-  "[[asked*]] as a vector, kept per type and selection where the type has kept fewer than a
-  thousand."
+  "[[asked*]] as a vector, kept per type and selection while the type's cache has room."
   [type sel]
   (if (= select/every sel)
     (:recognitum.record/required-v type)
@@ -51,7 +51,7 @@
 
 (defn nothing?
   "Whether `sel` selects no check of `type` and asks the presence of none of its required
-  fields, kept per type and selection where the type has kept fewer than a thousand."
+  fields, kept per type and selection while the type's cache has room."
   [type sel]
   (let [^java.util.concurrent.ConcurrentHashMap kept (:recognitum.record/nothing type)
         b (when (some? sel) (.get kept sel))]

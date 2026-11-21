@@ -18,8 +18,8 @@
   (ex-info (str "absent field " k) {:recognitum.checks/absent k}))
 
 (defn fetch-failed
-  "The exception a read throws when source `src` failed to answer it, with `cause`, what the
-  source threw or answered."
+  "The exception that a read of source `src` throws where the source failed to answer the
+  read. Its cause is `cause`: what the source threw, or the Throwable it answered for the key."
   [src cause]
   (ex-info (str "fetch failed: " src) {:recognitum.checks/fetch-failed src} cause))
 
@@ -28,8 +28,10 @@
   (Object.))
 
 (defn field
-  "The value of field `k` in `value`; throws [[absent]] when `value` has no `k`. Inlined at
-  each call, so each check's reads keep a profile of their own."
+  "The value of field `k` in `value`. Throws the exception that [[absent]] makes where `value`
+  lacks `k`."
+  ;; inlined: HotSpot keeps one profile of receiver types for each call site in a method's
+  ;; bytecode, and each check's reads are then call sites of that check's own
   {:inline (fn [value k]
              (let [v (with-meta (gensym "value") {:tag 'clojure.lang.ILookup})]
                `(let [~v ~value
@@ -41,6 +43,11 @@
 
 ;;; ------------------------------------------------------------- parks
 
+;; A Park is a body stopped at a read of `src`: `ks` is the key where `one?`, else a vector of
+;; distinct keys; `frame` is the thread binding frame at the read; `k`, the continuation, takes
+;; the answer and resumes the body. A Recur is one step of a loop, for [[settle]]'s trampoline;
+;; a TryExit and a Thrown carry a value and a throw out of a try region. A Failure stands in
+;; for the answer to a read that `src` failed, with its `cause`.
 (deftype Park [src ks one? frame k])
 (deftype Recur [thunk])
 (deftype TryExit [v])
@@ -54,7 +61,7 @@
 
 (defn- distinct-keys
   "The keys of `xs` in order, each once, as a vector without metadata: what
-  `(into [] (distinct) xs)` gives, without its transients for a hash set or a short vector."
+  `(into [] (distinct) xs)` gives."
   [xs]
   (cond
     (instance? clojure.lang.PersistentHashSet xs)
@@ -96,13 +103,19 @@
 (defn try-exit [v] (TryExit. v))
 
 (defn settle
-  "Runs Recur thunks until the result is something else."
+  "`r`, or, where `r` is a Recur, the result of calling its thunk and of each Recur thunk after
+  it, up to the first result that is not a Recur."
   [r]
   (if (instance? Recur r) (recur ((.-thunk ^Recur r))) r))
 
 (defn run-in-try
-  "Runs `thunk` inside a try region. Its TryExit goes to `exit` and its throw to `handler`, both
-  outside the region; a Park leaves with a continuation that re-enters the region."
+  "Runs `thunk` inside a try region, and returns:
+
+  - `(exit v)` where `thunk` returns a TryExit of `v`;
+  - `(handler t)` where `thunk` throws `t`;
+  - where `thunk` stops at a read, a Park whose continuation resumes inside the region.
+
+  `exit` and `handler` run outside the region."
   [thunk handler exit]
   (let [r (try (settle (thunk)) (catch Throwable t (Thrown. t)))]
     (cond

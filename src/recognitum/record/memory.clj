@@ -1,12 +1,20 @@
 (ns recognitum.record.memory
-  "What a draft or a value of an unsealed type remembers: a `Memo`, the checks that passed on
-  the entries it was set for and the keys written since. [[passes]] answers, given a type and
-  entries with a memory, the checks the memory shows passing; [[passes-mask]] answers the same
-  as a mask, for a type of at most 64 checks. A memory shows a check passing only where its proof
-  is the sealed value it was set for, or a draft of the type's proof strategy that the strategy
-  confirms was marked with the matching `PassKey`; a memory moved onto other entries shows
-  nothing. A type's `Hot`, made by [[hot-of]], holds what these read of it. Hidden: the check
-  that entries were not moved, and the masks and the sets kept for them."
+  "What a draft, or a value of an unsealed type, remembers: its memory, a `Memo` that holds the
+  checks that passed on the entries it was made for (its base) and the keys written since.
+
+  - [[passes]] answers the checks that a memory shows passing on given entries, and
+    [[passes-mask]] answers the same as a mask.
+  - A memory shows a check passing only on the strength of its proof: either the sealed value
+    that is its base, which passes every check, or a draft of the proof strategy (what
+    `recognitum.proof/open` makes, not a `recognitum.record.draft` draft) that the strategy
+    confirms was marked with the matching `PassKey`. A memory shows nothing on entries that
+    differ from its base at a key not written since: it was moved onto other entries.
+  - A type's `Hot`, made by [[hot-of]], holds what these functions read of the type, and its
+    masks where it has them: in a type of at most 64 checks, each check has a bit of a
+    `long`, and [[mask-of]] and [[set-of]] turn a set of checks into the `long` of their bits
+    and back.
+
+  Hidden: the test that a memory was not moved, and the sets kept for masks."
   (:require
    [recognitum.proof :as proof]))
 
@@ -18,23 +26,25 @@
                      (= mask (.-mask ^PassKey o))))
   (hashCode [_] (unchecked-add-int (System/identityHashCode data) (hash passes))))
 
-;; What a draft remembers: the checks `passes` that pass on the entries of `base`, as `proof`
-;; shows, and the keys `written` since. `proof` is a sealed value of `type` that is `base`
-;; itself, so every check passes (never of an unsealed type, whose `Hot` names a class nothing is
-;; an instance of), or a draft of the type's proof strategy marked with
-;; `(PassKey base passes mask)`; nil where nothing passes. `mask` is `passes` as a mask (see
-;; [[Hot]]), or nil for a type of more than 64 checks.
+;; What a draft, or a value of an unsealed type, remembers: the checks `passes` that pass on
+;; the entries of `base`, as `proof` shows, and the keys `written` since. `proof` is a sealed
+;; value of `type` that is `base` itself, so every check passes (never of an unsealed type,
+;; whose `Hot` names a class nothing is an instance of), or a draft of the proof strategy
+;; marked with `(PassKey base passes mask)`; nil where nothing passes. `mask` is `passes` as a
+;; mask, or nil for a type of more than 64 checks.
 (deftype Memo [type base passes written proof mask])
 
-;; What `passes` reads of a type, in fields: its value class, its draft class, its proof
-;; strategy, its check ids and each key's readers as a vector. A type of at most 64 checks
-;; also gives each check a bit of a long: `bits` maps each id to its bit, `all` has every
-;; bit, `readers-m` maps each key to the bits of its readers, `ids-v` holds the ids by bit,
-;; and `sets` keeps the set of each mask asked for. Of a larger type these are nil.
+;; What [[passes]] and [[passes-mask]] read of a type, in fields: its value class, its draft
+;; class, its proof strategy, its check ids and each key's readers as a vector. A type of at
+;; most 64 checks also gives each check a bit of a long: `bits` maps each id to its bit, `all`
+;; has every bit, `readers-m` maps each key to the bits of its readers, `ids-v` holds the ids
+;; by bit, and `sets` keeps the set of each mask asked for. Of a larger type these are nil.
 (deftype ^:private Hot [vc dc strategy ids readers-v bits all readers-m ids-v ^java.util.concurrent.ConcurrentHashMap sets])
 
 (defn hot-of
-  "The `Hot` of a type with check ids `ids` and readers `readers` (key to set of ids)."
+  "The `Hot` of a type: its value class `vc`, draft class `dc` and `strategy`, its check ids
+  `ids`, and its readers, as `readers` (key to set of ids) and `readers-v` (key to vector of
+  ids). It holds masks where `ids` has at most 64 checks."
   [vc dc strategy ids readers readers-v]
   (if (<= (count ids) 64)
     (let [ids-v (vec (sort-by str ids))
@@ -53,8 +63,7 @@
         (if (.hasNext it) (recur (bit-or m (long (bits (.next it))))) m)))))
 
 (defn set-of
-  "The set of check ids of `mask`, kept for the next call where the type has kept fewer than
-  a thousand."
+  "The set of check ids of `mask`, kept in `hot` for the next call while it has room."
   [^Hot hot ^long mask]
   (let [^java.util.concurrent.ConcurrentHashMap sets (.-sets hot)]
     (or (.get sets mask)
@@ -78,10 +87,10 @@
              (every? #(or (contains? data %) (contains? written %)) (keys base))))))
 
 (defn passes
-  "The checks a draft's memory `mo` shows passing on its entries `data`: what its proof shows
-  passing on the entries it was set for, less the checks that read a key written since. A
-  memory whose entries differ from `data` on a key it does not record as written was moved
-  onto other entries, and shows nothing."
+  "The checks of `type` that the memory `mo` shows passing on the entries `data`: what its
+  proof shows passing on its base, less the readers of each key written since. Shows nothing
+  where `mo` is not a memory of `type`, and where `data` differs from the base at a key that
+  `mo` does not record as written: the memory was moved onto other entries."
   [type data mo]
   (if-not (and (instance? Memo mo) (identical? type (.-type ^Memo mo)))
     #{}

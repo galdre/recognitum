@@ -1,12 +1,16 @@
 (ns recognitum.record.draft
-  "The draft: an unchecked map of a type that remembers which checks pass on its entries, and
-  forgets, at each write, the checks that read a key written. A `Draft` holds its entries, a
-  cell with its memory (a `recognitum.record.memory.Memo`), its metadata and how many of its
-  keys its type does not declare. [[draft?]] asks whether a value is a draft, [[marks-of]]
-  answers its memory, [[rewritten]] makes the draft a write gives, [[odd-after]] counts the
-  undeclared keys after a write of several keys, and [[changed-keys]] answers the keys a write
-  changed. Hidden: the count of undeclared keys kept at each write, the map methods, and the
-  sentinel of an absent entry."
+  "The draft: an unchecked map of a type that remembers which checks pass on its entries and,
+  at each write, forgets the checks that read a key written. A `Draft` holds its entries; its
+  cell, an atom that holds its memory (a `recognitum.record.memory.Memo`); its metadata; and
+  how many of its keys its type does not declare.
+
+  - [[draft?]] answers whether a value is a draft, and [[marks-of]] answers a draft's memory;
+  - [[rewritten]] makes the draft that a write gives;
+  - [[odd-after]] counts the undeclared keys after a write of several keys;
+  - [[changed-keys]] answers the keys that a write changed.
+
+  Hidden: the count of undeclared keys kept at each write, the map methods, and the sentinel
+  of an absent entry."
   (:require
    [recognitum.record.memory])
   (:import
@@ -61,20 +65,21 @@
     (and (instance? Memo mo) (not (contains? (:keys (.-type ^Memo mo)) k)))))
 
 (defn- odd-with
-  "The count of keys that its type does not declare of draft `d` with `k` added, a key `d`
-  does not hold."
+  "The number of keys that draft `d`'s type does not declare among `d`'s keys with `k` added,
+  where `d` does not hold `k`."
   ^long [^Draft d k]
   (if (undeclared? d k) (inc (.-odd d)) (.-odd d)))
 
 (defn- odd-without
-  "The count of keys that its type does not declare of draft `d` with `k` removed, a key `d`
-  holds."
+  "The number of keys that draft `d`'s type does not declare among `d`'s keys with `k`
+  removed, where `d` holds `k`."
   ^long [^Draft d k]
   (if (and (pos? (.-odd d)) (undeclared? d k)) (dec (.-odd d)) (.-odd d)))
 
 (defn odd-after
-  "The count of keys that its type does not declare of `data`, draft `d`'s entries written at
-  the keys `ks`: `d`'s count, less each such key removed, plus each added."
+  "The number of keys of `data` that draft `d`'s type does not declare, where `data` is `d`'s
+  entries after a write of the keys `ks`: `d`'s count, less each such key the write removed,
+  plus each it added."
   ^long [^Draft d data ks]
   (let [old (.-data d)]
     (reduce (fn [^long n k]
@@ -86,9 +91,10 @@
             (.-odd d) ks)))
 
 (defn rewritten
-  "A draft holding `data`, written from draft `d`, of which `odd` keys are keys its type does
-  not declare: it remembers what `d` remembers, its keys written as `add` gives them from
-  `d`'s. A memory where nothing passes stays as it is."
+  "The draft that a write to draft `d` gives: it holds `data`, of whose keys `odd` are keys its
+  type does not declare, and `d`'s metadata. Its memory is `d`'s, with the keys written that
+  `add` returns from `d`'s keys written, so that it forgets the checks that read them. A
+  memory with no proof, which shows nothing passing, is kept as it is."
   [^Draft d data add ^long odd]
   (let [mo @(.-cell d)]
     (Draft. data
@@ -104,7 +110,9 @@
   [x]
   (instance? Draft x))
 
-(defn marks-of ^Object [d] @(.-cell ^Draft d))
+(defn marks-of
+  "The memory that draft `d`'s cell holds now."
+  ^Object [d] @(.-cell ^Draft d))
 
 (defn changed-keys
   "The keys whose entry differs between `old` and `new`: added, removed, or holding a value

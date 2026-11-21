@@ -1,10 +1,10 @@
 (ns recognitum.define
-  "What `defproven` and `defproven-in` expand to: [[defproven]] splits the form into its sections,
+  "What `defproven` and `defproven-in` expand to. [[defproven]] splits the form into its sections,
   hands the checks sections to `recognitum.define.checks` and the sections of methods to
-  `recognitum.define.methods`, refuses the mistakes it can see, and emits a call of
-  `recognitum.record/define-type` with the type's factories. `defchecks`, `defcopy` and
-  `defconcern` expand through `recognitum.define.bundles`; the grammar every defining form shares
-  is `recognitum.define.clauses`.
+  `recognitum.define.methods`, and refuses the mistakes it can see. It emits one form that calls
+  `recognitum.record/define-type` and defines the type's constructors, `map->T` and `->T`.
+  `defchecks`, `defcopy` and `defconcern` expand through `recognitum.define.bundles`. The grammar
+  that every defining form shares is in `recognitum.define.clauses`.
 
   Nothing here is part of the public API."
   (:require
@@ -22,10 +22,14 @@
 ;;; ------------------------------------------------------------------ types
 
 (defn- parse-sections
-  "The sections after the fields: the checks sections (`rec/checks` and the bundle bindings, each
-  `{:marker :clauses}`), then the sections of methods, each `{:marker :methods}` with the
-  `:protocol` var or the interface `:class` that heads it. A checks section after a section of
-  methods is refused, and so is metadata on a head other than a bundle's."
+  "The sections after the fields, in the order written, each headed by its `:marker`:
+
+  - a checks section, `rec/checks` or a bundle binding: `{:marker :clauses}`;
+  - a section of methods: `{:marker :methods}`, with the `:protocol` var or the interface `:class`
+    that heads it.
+
+  Refuses a checks section after a section of methods, a head that names a class other than an
+  interface or `Object`, and metadata on a head other than a bundle binding's."
   [ctx checks-marker forms]
   (loop [items forms, cur nil, out []]
     (if-let [[x & more] (seq items)]
@@ -62,6 +66,9 @@
       (cond-> out cur (conj cur)))))
 
 (defn- emit-factories
+  "The forms `[(def map->T ...) (def ->T ...)]` that define the constructors of type `tname`, each
+  with a docstring that ends with `kind-doc`. Each constructor makes a value of the type that the
+  local `t` holds."
   [tname fields kind-doc t key-of]
   (let [m (gensym "m")
         build (into {} (for [f fields] [(key-of f) f]))
@@ -84,8 +91,9 @@
               `([~@(map #(with-meta % nil) fields)] (recognitum.record.values/make ~t ~build)))))]))
 
 (defn- instead
-  "What a caller of the class's own constructor reads it should do instead: call the functions
-  `factories` define, named in the namespace of `tag-sym`, the type's name."
+  "The remedy that ends the refusal of the class's own constructor: make a value with the
+  constructors that `factories` define, each named in the namespace of `tag-sym`, the type's
+  name."
   [tag-sym factories]
   (str "make a value with "
        (str/join " or " (map #(str (namespace tag-sym) "/" (second %)) factories))))
@@ -101,9 +109,13 @@
   (refuse-duplicates! ctx "fields" fields))
 
 (defn- define-type-form
-  "The form that defines the type: a call of `recognitum.record/define-type` with the type's
-  name, fields, checks `all`, interfaces, methods and the words its constructor's refusal
-  closes with; a sealed type's key guard and change guard, or `:unsealed`; and `wiring`."
+  "The form that defines the type: a call of `recognitum.record/define-type` on a spec and
+  `wiring`. The spec holds:
+
+  - the type's name, its fields, its checks `all`, its interfaces and its methods;
+  - `:instead`, the remedy that ends the refusal of the class's own constructor;
+  - for a sealed type, `:guard` and `:change`, the makers of its guards; for an unsealed type,
+    `:unsealed true`."
   [tname tag-sym fields optional key-of all interfaces methods factories unsealed wiring]
   `(recognitum.record/define-type
      ~(merge
@@ -130,16 +142,22 @@
           bindings))
 
 (defn defproven
-  "The expansion of `(rec/defproven T [fields] sections... method-sections...)`. `opts` holds
-  what [[defchecks]] takes; `:wiring`, the form of the map `recognitum.record/define-type`
-  takes as its second argument; and `:strategy`, the proof strategy that form names, which
-  answers the class's name and refuses here, at expansion, every definition it would refuse
-  when the type is defined. With `:unsealed true` in `opts`, it is the expansion of
-  `rec/defproven-in`: the type is defined unsealed, and its constructors check nothing.
+  "The expansion of `(rec/defproven T [fields] sections... method-sections...)`, given the
+  macro's `&env` as `env` and the sections as `forms`. `opts` holds:
 
-  The expansion is one form, at the top level or inside another: the methods compile with the
-  checks, before the constructors' vars are interned, so a method that does not compile leaves
-  nothing. At run time [[defined]] defines the type and imports its class."
+  - `:compile-body`, `:read-macros` and `:checks-marker`, as
+    [[recognitum.define.bundles/defchecks]] takes them;
+  - `:wiring`, the form of the map that `recognitum.record/define-type` takes as its second
+    argument;
+  - `:strategy`, the proof strategy that `:wiring` names. It answers the class's name, and here,
+    at expansion, it refuses every definition that it would refuse when the type is defined;
+  - `:unsealed`: where true, this is the expansion of `rec/defproven-in`, whose type is defined
+    unsealed and whose constructors check nothing.
+
+  The expansion is one form, at the top level or inside another, and its value is the type's
+  class. The methods compile with the checks, before the constructors' vars are interned, so a
+  method that does not compile leaves nothing. At run time, [[defined]] defines the type and
+  imports its class."
   [env tname fields forms {:keys [compile-body read-macros checks-marker wiring strategy unsealed]}]
   (let [ctx {:where (str *ns* "/" tname) :call-env env :owner tname :field-word "field"
              :read-macros read-macros}
@@ -177,12 +195,18 @@
        (recognitum.record.values/value-class ~t))))
 
 (defn defined
-  "Calls `define`, which defines the type named `tname` in the namespace named `nsym`, and imports
-  its class, named `classname`, there under `tname`. Before `define` runs, refuses a name that
-  the namespace maps to a var, or to a class of another name, since the import would fail
-  there. Where either refuses or `define` throws, the definition leaves nothing: each of
-  `new-vars`, the constructors' vars that the definition's form interned, is unmapped, and an
-  earlier definition of the type's name stays current. Returns the type."
+  "Defines the type named `tname` in the namespace named `nsym` by calling `define`, and imports
+  the type's class, named `classname`, into that namespace under `tname`. Returns the type.
+
+  Throws ex-info whose `:error` is `:recognitum/refused`, its message prefixed with `where`:
+
+  - before calling `define`, where the namespace maps `tname` to a var, or to a class of another
+    name, since the import would fail;
+  - where `define` throws; the message is that of the innermost cause.
+
+  A refused definition leaves nothing: each var of `new-vars` (the constructors' vars that the
+  definition's form interned) that is still unbound is unmapped, and an earlier definition of
+  the type stays current."
   [where nsym tname classname new-vars define]
   (let [n (the-ns nsym)
         previous (.getMapping n tname)

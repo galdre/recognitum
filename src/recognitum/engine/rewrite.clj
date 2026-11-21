@@ -1,14 +1,16 @@
 (ns recognitum.engine.rewrite
   "The resumable form of an expanded check body. Every subform that contains a read,
-  `(&fetch src k)` or `(&fetch-each src ks)`, or a `recur` of a loop that contains one, is
-  rewritten into continuation-passing style; every other subform stays as written. A read becomes a Park that
-  holds the request and a continuation. A loop that reads becomes a local fn whose `recur`
-  returns a Recur thunk to a trampoline. A `try` that reads becomes a call of `run-in-try`,
-  which keeps its handler around every continuation taken inside it.
+  `(&fetch src k)` or `(&fetch-each src ks)`, or a `recur` of a loop that contains a read, is
+  rewritten into continuation-passing style; every other subform stays as written.
+
+  - A read becomes a Park that holds the request and a continuation.
+  - A loop that reads becomes a local fn whose `recur` returns a Recur thunk to a trampoline.
+  - A `try` that reads becomes a call of `run-in-try`, which keeps its handler around every
+    continuation taken inside it.
 
   Continuations are compile-time functions from a value expression to a form. A continuation
-  that is not known to be safe is bound to a local join fn before the rewrite enters a scope
-  that binds names, so its code never sees the names that scope binds.
+  that is not simple (safe in any scope) is bound to a local join fn before the rewrite enters
+  a scope that binds names, so that its code never sees the names that scope binds.
 
   Nothing here is part of the library's surface."
   (:require
@@ -34,8 +36,8 @@
     :else false))
 
 (defn- has-free-recur?
-  "A recur not inside a nested loop or fn. Outside a rewritten loop no such recur is ever met,
-  since loops that do not read are left whole."
+  "Whether `form` holds a `recur` that is not inside a nested loop or fn. Outside a rewritten
+  loop, no such recur is ever met, since loops that do not read are left whole."
   [form]
   (cond
     (seq? form) (let [op (first form)]
@@ -46,8 +48,8 @@
     :else false))
 
 (defn reads?
-  "Whether expanded `form` holds a read of a source outside quoted forms and fns: whether its
-  compiled body can park."
+  "Whether expanded `form` holds a read of a source outside quoted forms, fns, `reify` and
+  `deftype`: whether its compiled body can park."
   [form]
   (boolean (has-read? form)))
 
@@ -56,8 +58,9 @@
 ;;; ------------------------------------------------------------- continuations
 
 (defn- simple
-  "Marks a continuation that places its value exactly once, immediately, in code that is safe in
-  any scope."
+  "`f` marked as simple: a continuation that places its value exactly once, immediately, in
+  code that is safe in any scope. `sym`, where given, names a runtime fn of one argument that
+  does what `f` does."
   ([f] (with-meta f {::simple true}))
   ([f sym] (with-meta f {::simple true ::sym sym})))
 
@@ -67,8 +70,8 @@
 (def ^:private exit-k (simple (fn [v] `(try-exit ~v))))
 
 (defn- with-join
-  "(f k') where k' is safe in any scope: k when simple, else a call of a join fn bound around the
-  result."
+  "`(f k')`, where `k'` is safe in any scope: `k` itself where `k` is simple, else a call of a
+  join fn, a local fn bound around the result that runs `k`."
   [k f]
   (if (simple? k)
     (f k)
@@ -86,7 +89,7 @@
   (or (nil? x) (boolean? x) (number? x) (string? x) (keyword? x) (char? x)))
 
 (defn- bind
-  "Evaluates expr now and passes its value to k."
+  "The form that evaluates `expr` once and passes its value to `k`."
   [expr k]
   (if (or (constant? expr) (symbol? expr) (simple? k))
     (k expr)
